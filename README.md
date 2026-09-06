@@ -1,3 +1,5 @@
+![RimScan](Rimscan.png)
+
 # Rimscan CLI
 
 Rimscan CLI is a standalone, database-free passive reconnaissance tool for
