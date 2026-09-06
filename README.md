@@ -48,8 +48,10 @@ This repository intentionally performs discovery and standard read-only
 auditing. It does not attempt exploitation or intrusive testing. Respect
 provider terms, rate limits, and the scope of the authorization you received.
 
-Want continuous monitoring, active vulnerability testing, and a dashboard?
-Check out [Rimscan Cloud](https://rimscan.cloud).
+## Coming soon
+A hosted version with continuous monitoring, active vulnerability testing (Deep Scan), and a dashboard is in development.
+
+Star this repo to follow progress.
 
 ## Development
 
