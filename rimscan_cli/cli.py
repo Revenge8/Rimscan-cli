@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
 
+from .banner import render_banner
 from recon.cert_audit import CertAuditor
 from recon.dns_audit import DNSAuditor
 from recon.enumeration import SubdomainEnumerator
@@ -124,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-certs", action="store_true", help="skip the standard TLS certificate audit")
     scan.add_argument("--nuclei", action="store_true", help="run standard Nuclei with dos,fuzz,intrusive templates excluded")
     scan.add_argument("--output", type=Path, help="write JSON results to this file")
+    scan.add_argument(
+        "--quiet",
+        "--no-banner",
+        dest="quiet",
+        action="store_true",
+        help="suppress the startup banner",
+    )
     scan.add_argument("--verbose", action="store_true", help="enable diagnostic logging")
     return parser
 
@@ -134,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "scan":
         parser.error("a command is required")
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
+    logging.getLogger("urllib3").setLevel(logging.ERROR)
+    if not args.quiet and not args.output:
+        render_banner()
     try:
         result = scan_domain(
             args.domain,
@@ -150,4 +161,3 @@ def main(argv: list[str] | None = None) -> int:
         args.output.write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
     return 0
-
