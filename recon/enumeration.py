@@ -88,6 +88,7 @@ class SubdomainEnumerator:
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.results: Set[str] = set()
+        self.source_status: Dict[str, str] = {}
         self.session = self._build_session()
 
     def _build_session(self) -> requests.Session:
@@ -104,6 +105,33 @@ class SubdomainEnumerator:
         return session
 
     _EXTERNAL_TIMEOUT_CAP = 10.0
+    _WAYBACK_TIMEOUT = (5.0, 5.0)
+    _OSINT_RETRIES = 1
+
+    def _quiet_osint_get(self, url: str) -> requests.Response:
+        """Fetch slow OSINT sources with bounded, quiet retries."""
+        session = requests.Session()
+        session.mount(
+            "https://",
+            HTTPAdapter(
+                max_retries=Retry(
+                    total=self._OSINT_RETRIES,
+                    connect=self._OSINT_RETRIES,
+                    read=self._OSINT_RETRIES,
+                    status=self._OSINT_RETRIES,
+                    status_forcelist=(429, 500, 502, 503, 504),
+                    allowed_methods=["GET"],
+                    raise_on_status=False,
+                )
+            ),
+        )
+        return session.get(url, headers=self._headers(), timeout=self._WAYBACK_TIMEOUT)
+
+    def _wayback_get(self, url: str) -> requests.Response:
+        return self._quiet_osint_get(url)
+
+    def _otx_get(self, url: str) -> requests.Response:
+        return self._quiet_osint_get(url)
 
     def _request_timeout(self, minimum: float = 0.0) -> float:
         connect, read = ScanConfig.normalize_timeout(self.timeout)
@@ -233,16 +261,16 @@ class SubdomainEnumerator:
         subdomains: Set[str] = set()
         url = f"https://otx.alienvault.com/api/v1/indicators/domain/{self.domain}/passive_dns"
         try:
-            resp = self._get_with_retry(url)
-            if resp is None:
-                return subdomains
+            resp = self._otx_get(url)
             resp.raise_for_status()
             for record in resp.json().get("passive_dns", []):
                 hostname = record.get("hostname", "").strip().lower()
                 if self._is_valid_subdomain(hostname):
                     subdomains.add(hostname)
-        except (requests.RequestException, ValueError) as e:
-            _log_source_error("OTX", e)
+        except requests.Timeout:
+            self.source_status["otx"] = "timed out, skipped"
+        except (requests.RequestException, ValueError):
+            self.source_status["otx"] = "unavailable, skipped"
         return subdomains
 
     def from_rapiddns(self) -> Set[str]:
@@ -294,7 +322,7 @@ class SubdomainEnumerator:
             "&output=json&collapse=urlkey&fl=original"
         )
         try:
-            resp = self._get(url, timeout=self._capped_timeout(self._EXTERNAL_TIMEOUT_CAP))
+            resp = self._wayback_get(url)
             resp.raise_for_status()
 
             # defensively read Content-Length — tests often use MagicMock
@@ -371,8 +399,10 @@ class SubdomainEnumerator:
                 hostname = urlparse(raw_url).netloc.split(":")[0].lower()
                 if self._is_valid_subdomain(hostname):
                     subdomains.add(hostname)
-        except requests.RequestException as e:
-            _log_source_error("Wayback", e)
+        except requests.Timeout:
+            self.source_status["wayback"] = "timed out, skipped"
+        except requests.RequestException:
+            self.source_status["wayback"] = "unavailable, skipped"
         return subdomains
 
     def from_virustotal(self, api_key: str) -> Set[str]:
@@ -644,7 +674,9 @@ class SubdomainEnumerator:
                     except Exception as e:
                         _log_source_error(name, e)
                         found = set()
-                    print(f"[+] {name}: {len(found)} subdomains")
+                    status = self.source_status.pop(name, "")
+                    suffix = f" ({status})" if status else ""
+                    print(f"[+] {name}: {len(found)} subdomains{suffix}")
                     self.results |= found
                     if rate_limit_delay:
                         time.sleep(rate_limit_delay)
