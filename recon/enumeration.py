@@ -282,8 +282,10 @@ class SubdomainEnumerator:
                     subdomains.add(hostname)
         except requests.Timeout:
             self.source_status["otx"] = "timed out, skipped"
-        except (requests.RequestException, ValueError):
+        except requests.RequestException:
             self.source_status["otx"] = "unavailable, skipped"
+        except ValueError as e:
+            _log_source_error("OTX", e)
         return subdomains
 
     def from_rapiddns(self) -> Set[str]:
