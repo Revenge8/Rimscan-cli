@@ -50,6 +50,21 @@ class TakeoverVerdict(Enum):
     NOT_VULNERABLE = "not_vulnerable"
     UNKNOWN_SERVICE = "unknown_service"
     HISTORICAL_CANDIDATE = "historical_candidate"
+    VERIFIED_VULNERABLE = "verified_vulnerable"
+    FALSE_POSITIVE = "false_positive"
+    UNVERIFIED_MANUAL = "unverified_manual"
+
+
+_VERIFIABLE_SERVICES = {
+    "azure": "azure",
+    "github": "github",
+    "aws/s3": "aws/s3",
+    "google cloud storage": "google cloud storage",
+    "heroku": "heroku",
+    "digitalocean": "digitalocean",
+}
+
+
 @dataclass
 class TakeoverFinding:
     hostname: str

@@ -50,9 +50,19 @@ class SecretFinding:
     context: str = ""
 
     def redacted_match(self) -> str:
-        if len(self.match) <= 8:
-            return "***"
-        return f"{self.match[:4]}...{self.match[-4:]}"
+        return _redact(self.match)
+
+    def redacted_context(self) -> str:
+        context = self.context
+        for pattern in SECRET_PATTERNS.values():
+            context = pattern.sub(lambda match: _redact(match.group()), context)
+        return context
+
+
+def _redact(value: str) -> str:
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
 
 
 class SecretScanner:

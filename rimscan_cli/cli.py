@@ -1,13 +1,15 @@
-"""Command-line orchestration for passive, authorized reconnaissance."""
+"""Command-line orchestration for authorized reconnaissance."""
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import logging
 import shutil
 import subprocess
 import tempfile
+from contextlib import nullcontext, redirect_stdout
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -18,7 +20,7 @@ from recon.cert_audit import CertAuditor
 from recon.dns_audit import DNSAuditor
 from recon.enumeration import SubdomainEnumerator
 from recon.resolver import DNSResolver
-from recon.secrets import SecretScanner
+from recon.secrets import SecretFinding, SecretScanner
 from recon.takeover import FingerprintDatabase, TakeoverDetector
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,16 @@ PASSIVE_NUCLEI_EXCLUDED_TAGS = ("dos", "fuzz", "intrusive")
 def _json_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, SecretFinding):
+        return {
+            "secret_type": value.secret_type,
+            "match": value.redacted_match(),
+            "source": value.source,
+            "line_number": value.line_number,
+            "entropy": value.entropy,
+            "verified": value.verified,
+            "context": value.redacted_context(),
+        }
     if is_dataclass(value):
         return {key: _json_value(item) for key, item in asdict(value).items()}
     if isinstance(value, list):
@@ -79,17 +91,20 @@ def scan_domain(
     include_certs: bool = True,
     include_nuclei: bool = False,
 ) -> dict[str, Any]:
-    """Run the standalone passive scan without persistence or SaaS dependencies."""
+    """Run a standalone reconnaissance scan without persistence or SaaS dependencies."""
     domain = domain.lower().strip().strip(".")
     if not domain or any(char in domain for char in "/:@ "):
         raise ValueError("domain must be a hostname, not a URL, email address, or IP-style target")
     if include_secrets and not authorized:
         raise PermissionError("--secrets requires --authorized because it sends requests to target endpoints")
+    if include_nuclei and not authorized:
+        raise PermissionError("--nuclei requires --authorized because it sends active probes to target endpoints")
 
     enumerator = SubdomainEnumerator(domain)
     subdomains = sorted(enumerator.run())
     hosts = sorted(set([domain, *subdomains]))
     resolver = DNSResolver()
+    resolver.detect_wildcard(domain)
     resolutions = resolver.resolve_many(hosts)
     detector = TakeoverDetector(FingerprintDatabase())
     takeover_findings = [detector.check(result) for result in resolutions]
@@ -123,14 +138,14 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--secrets", action="store_true", help="fetch common public paths for exposed-secret checks (requires --authorized)")
     scan.add_argument("--zone-transfer", action="store_true", help="check DNS servers for AXFR exposure")
     scan.add_argument("--no-certs", action="store_true", help="skip the standard TLS certificate audit")
-    scan.add_argument("--nuclei", action="store_true", help="run standard Nuclei with dos,fuzz,intrusive templates excluded")
+    scan.add_argument("--nuclei", action="store_true", help="run authorized Nuclei checks with dos,fuzz,intrusive template tags excluded")
     scan.add_argument("--output", type=Path, help="write JSON results to this file")
     scan.add_argument(
         "--quiet",
         "--no-banner",
         dest="quiet",
         action="store_true",
-        help="suppress the startup banner",
+        help="suppress the startup banner and scan progress output",
     )
     scan.add_argument("--verbose", action="store_true", help="enable diagnostic logging")
     return parser
@@ -146,14 +161,18 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet and not args.output:
         render_banner()
     try:
-        result = scan_domain(
-            args.domain,
-            authorized=args.authorized,
-            include_zone_transfer=args.zone_transfer,
-            include_secrets=args.secrets,
-            include_certs=not args.no_certs,
-            include_nuclei=args.nuclei,
+        output_context = (
+            redirect_stdout(io.StringIO()) if args.quiet or args.output else nullcontext()
         )
+        with output_context:
+            result = scan_domain(
+                args.domain,
+                authorized=args.authorized,
+                include_zone_transfer=args.zone_transfer,
+                include_secrets=args.secrets,
+                include_certs=not args.no_certs,
+                include_nuclei=args.nuclei,
+            )
     except (PermissionError, ValueError) as exc:
         parser.error(str(exc))
     rendered = json.dumps(result, indent=2, sort_keys=True)

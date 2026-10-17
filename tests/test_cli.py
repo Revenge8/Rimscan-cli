@@ -1,10 +1,12 @@
 from unittest.mock import MagicMock, patch
 import requests
 
-from rimscan_cli.cli import PASSIVE_NUCLEI_EXCLUDED_TAGS, build_parser, main, scan_domain
+from rimscan_cli.cli import PASSIVE_NUCLEI_EXCLUDED_TAGS, _json_value, build_parser, main, scan_domain
 from rimscan_cli.banner import ASCII_BANNER, BANNER, UNICODE_BANNER, render_banner
+from recon.resolver import ResolutionResult, ResolutionStatus
 from recon.enumeration import SubdomainEnumerator
-from recon.secrets import SecretScanner
+from recon.secrets import SecretFinding, SecretScanner
+from recon.takeover import TakeoverDetector, TakeoverFinding, TakeoverVerdict
 
 
 def test_help_requires_authorized_for_live_secret_scan():
@@ -53,18 +55,57 @@ def test_banner_prints_by_default_and_output_suppresses_it(monkeypatch, tmp_path
     assert capsys.readouterr().err == ""
 
 
+def test_quiet_scan_keeps_stdout_machine_readable(monkeypatch, capsys):
+    def noisy_scan(*args, **kwargs):
+        print("enumerating...")
+        return {"domain": "example.com"}
+
+    monkeypatch.setattr("rimscan_cli.cli.scan_domain", noisy_scan)
+
+    assert main(["scan", "example.com", "--quiet"]) == 0
+    assert capsys.readouterr().out == '{\n  "domain": "example.com"\n}\n'
+
+
 def test_scan_domain_is_database_free():
     fingerprints = MagicMock()
     fingerprints.entries = []
     fingerprints.match.return_value = None
     with patch("rimscan_cli.cli.SubdomainEnumerator.run", return_value=["www.example.com"]), \
          patch("rimscan_cli.cli.DNSResolver.resolve_many", return_value=[]), \
+         patch("rimscan_cli.cli.DNSResolver.detect_wildcard", return_value=False) as detect_wildcard, \
          patch("rimscan_cli.cli.DNSAuditor.audit", return_value=[]), \
          patch("rimscan_cli.cli.CertAuditor.audit_many", return_value=[]), \
          patch("rimscan_cli.cli.FingerprintDatabase", return_value=fingerprints):
         result = scan_domain("example.com")
     assert result["domain"] == "example.com"
     assert result["subdomains"] == ["www.example.com"]
+    detect_wildcard.assert_called_once_with("example.com")
+
+
+def test_scan_domain_requires_authorization_for_nuclei():
+    try:
+        scan_domain("example.com", include_nuclei=True)
+    except PermissionError as exc:
+        assert "--nuclei requires --authorized" in str(exc)
+    else:
+        raise AssertionError("Nuclei scans must require authorization")
+
+
+def test_secret_findings_are_redacted_in_cli_json():
+    secret = "ghp_" + "a" * 36
+    finding = SecretFinding(
+        secret_type="github_token",
+        match=secret,
+        source="https://example.com/.env",
+        context=f"TOKEN={secret}",
+    )
+
+    result = _json_value(finding)
+
+    assert result["match"] == finding.redacted_match()
+    assert result["context"] == f"TOKEN={finding.redacted_match()}"
+    assert secret not in result["match"]
+    assert secret not in result["context"]
 
 
 def test_secret_matches_are_redacted_for_display():
@@ -80,7 +121,10 @@ def test_passive_nuclei_exclusions_are_fixed():
 def test_subdomain_validation_requires_label_boundary():
     enumerator = SubdomainEnumerator("example.com")
     assert enumerator._is_valid_subdomain("api.example.com")
+    assert enumerator._is_valid_subdomain("api.example.com.")
     assert not enumerator._is_valid_subdomain("api.notexample.com")
+    assert not enumerator._is_valid_subdomain("api..example.com")
+    assert not enumerator._is_valid_subdomain("api-.example.com")
 
 
 def test_wayback_timeout_is_clean_and_does_not_stop_other_sources(capsys):
@@ -109,3 +153,24 @@ def test_wayback_and_otx_timeouts_are_clean_and_continue(capsys):
     assert "crt.sh: 1 subdomains" in output
     assert "Retrying" not in output
     assert "api.example.com" in results
+
+
+def test_takeover_active_verification_has_complete_verdicts_and_service_mapping():
+    detector = TakeoverDetector(MagicMock())
+    finding = TakeoverFinding(
+        hostname="example.github.io",
+        verdict=TakeoverVerdict.VULNERABLE,
+        service="GitHub Pages",
+        cname_chain=["example.github.io"],
+        evidence="fingerprint match",
+    )
+    detector.check = MagicMock(return_value=finding)
+    verifier = MagicMock()
+    verifier.verify.return_value = True
+
+    result = detector.check_and_verify(
+        ResolutionResult("example.github.io", ResolutionStatus.CNAME),
+        verifier,
+    )
+    assert result.verdict is TakeoverVerdict.VERIFIED_VULNERABLE
+    verifier.verify.assert_called_once_with("github", username="example")
