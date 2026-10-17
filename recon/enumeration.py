@@ -108,7 +108,7 @@ class SubdomainEnumerator:
     _WAYBACK_TIMEOUT = (5.0, 5.0)
     _OSINT_RETRIES = 1
 
-    def _quiet_osint_get(self, url: str) -> requests.Response:
+    def _quiet_osint_get(self, url: str, *, stream: bool = False) -> requests.Response:
         """Fetch slow OSINT sources with bounded, quiet retries."""
         session = requests.Session()
         session.mount(
@@ -125,10 +125,15 @@ class SubdomainEnumerator:
                 )
             ),
         )
-        return session.get(url, headers=self._headers(), timeout=self._WAYBACK_TIMEOUT)
+        return session.get(
+            url,
+            headers=self._headers(),
+            timeout=self._WAYBACK_TIMEOUT,
+            stream=stream,
+        )
 
     def _wayback_get(self, url: str) -> requests.Response:
-        return self._quiet_osint_get(url)
+        return self._quiet_osint_get(url, stream=True)
 
     def _otx_get(self, url: str) -> requests.Response:
         return self._quiet_osint_get(url)
@@ -205,10 +210,14 @@ class SubdomainEnumerator:
             name = name[:-1]
         if not name or (name != self.domain and not name.endswith("." + self.domain)):
             return False
-        if " " in name or "@" in name or "*" in name:
+        if len(name) > 253:
             return False
-        pattern = r"^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$"
-        return bool(re.match(pattern, name))
+        labels = name.split(".")
+        return all(
+            len(label) <= 63
+            and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+            for label in labels
+        )
 
     def from_crtsh(self) -> Set[str]:
         subdomains: Set[str] = set()
@@ -305,18 +314,8 @@ class SubdomainEnumerator:
             _log_source_error("RapidDNS", e)
         return subdomains
 
-    # Guard rail for wildly popular domains where the CDX index can run to
-    # hundreds of MB of JSON; loading that whole body via resp.json() risks
-    # a slow/failed parse or memory spike for one source out of many.
-    #
-    # NOTE: this stays on the original resp.json()/resp.text interface
-    # (rather than resp.iter_content()) deliberately — switching to a
-    # streaming read broke every test that mocks the response the normal
-    # way (setting .json()/.text), which is a compatibility regression, not
-    # an improvement. The size guard below is best-effort: it protects
-    # against a server that honestly reports Content-Length, and against an
-    # already-parsed .text body that's unexpectedly huge, without requiring
-    # every caller/test to simulate a real streaming response.
+    # Bound the CDX response while streaming it; large domains can return
+    # hundreds of MB of archived URLs.
     _WAYBACK_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 
     def from_wayback(self) -> Set[str]:
@@ -325,71 +324,27 @@ class SubdomainEnumerator:
             f"https://web.archive.org/cdx/search/cdx?url=*.{self.domain}"
             "&output=json&collapse=urlkey&fl=original"
         )
+        resp: Optional[requests.Response] = None
         try:
             resp = self._wayback_get(url)
             resp.raise_for_status()
 
-            # defensively read Content-Length — tests often use MagicMock
-            # where headers is a Mock, so coerce carefully to an int when
-            # possible and otherwise ignore the header.
-            content_length_val = None
-            try:
-                hdrs = getattr(resp, "headers", None)
-                if isinstance(hdrs, dict):
-                    content_length = hdrs.get("Content-Length")
-                else:
-                    try:
-                        content_length = hdrs.get("Content-Length") if hdrs is not None else None
-                    except Exception:
-                        content_length = None
-                if content_length is not None:
-                    try:
-                        content_length_val = int(content_length)
-                    except Exception:
-                        try:
-                            content_length_val = int(str(content_length))
-                        except Exception:
-                            content_length_val = None
-                if content_length_val and content_length_val > self._WAYBACK_MAX_BYTES:
-                    print(
-                        f"[!] Wayback: response too large "
-                        f"({content_length_val / 1_000_000:.1f} MB), skipping to avoid OOM"
-                    )
-                    return subdomains
-            except Exception:
-                # If anything unexpected happened reading headers, ignore
-                # the size hint and continue to parsing — don't let a test
-                # double or odd header object blow up the whole source.
-                content_length_val = None
-
-            raw_text = getattr(resp, "text", None)
-            if isinstance(raw_text, str):
+            content_length = resp.headers.get("Content-Length")
+            if content_length is not None:
                 try:
-                    if len(raw_text.encode("utf-8", errors="ignore")) > self._WAYBACK_MAX_BYTES:
-                        print("[!] Wayback: response body exceeds size cap, skipping to avoid OOM")
+                    if int(content_length) > self._WAYBACK_MAX_BYTES:
+                        self.source_status["wayback"] = "response too large, skipped"
                         return subdomains
-                except Exception:
-                    # If encoding inspection fails for some odd reason,
-                    # don't abort the whole source.
+                except (TypeError, ValueError):
                     pass
 
-            # Try resp.json() first, but if it raises ValueError (bad JSON)
-            # attempt to parse resp.text when it's a real string; fall back
-            # to skipping the source otherwise. This makes tests that set
-            # .json() or .text behave predictably.
-            try:
-                data = resp.json()
-            except ValueError:
-                try:
-                    raw = getattr(resp, "text", None)
-                    if isinstance(raw, str):
-                        data = json.loads(raw)
-                    else:
-                        print("[!] Wayback: could not parse JSON (resp.json() failed)")
-                        return subdomains
-                except Exception as e:
-                    _log_source_error("Wayback JSON parsing", e)
+            body = bytearray()
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                if len(body) + len(chunk) > self._WAYBACK_MAX_BYTES:
+                    self.source_status["wayback"] = "response too large, skipped"
                     return subdomains
+                body.extend(chunk)
+            data = json.loads(body)
 
             if not isinstance(data, list) or len(data) < 2:
                 return subdomains
@@ -407,6 +362,12 @@ class SubdomainEnumerator:
             self.source_status["wayback"] = "timed out, skipped"
         except requests.RequestException:
             self.source_status["wayback"] = "unavailable, skipped"
+        except (TypeError, ValueError):
+            logger.warning("Wayback source returned invalid JSON")
+            self.source_status["wayback"] = "invalid response, skipped"
+        finally:
+            if resp is not None:
+                resp.close()
         return subdomains
 
     def from_virustotal(self, api_key: str) -> Set[str]:
@@ -598,7 +559,11 @@ class SubdomainEnumerator:
         subdomains: Set[str] = set()
         resolver = DNSResolver(timeout=self._request_timeout(minimum=5.0))
         for result in resolver.resolve_many(candidates):
-            if result.status not in (ResolutionStatus.A_RECORD, ResolutionStatus.CNAME):
+            if result.status not in (
+                ResolutionStatus.A_RECORD,
+                ResolutionStatus.CNAME,
+                ResolutionStatus.DANGLING_CNAME,
+            ):
                 continue
             hostname = result.hostname.lower().strip(".")
             if self._is_valid_subdomain(hostname):

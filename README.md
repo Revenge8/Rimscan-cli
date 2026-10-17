@@ -35,7 +35,8 @@ The `--secrets` option performs HTTP requests to common public paths and
 therefore requires an explicit `--authorized` confirmation. Results are printed
 as JSON and can also be written with `--output`.
 
-When `--nuclei` is used, the CLI invokes Nuclei with the fixed exclusion:
+When `--nuclei` is used, the CLI invokes Nuclei with the fixed exclusion and
+requires `--authorized`:
 
 ```text
 -etags dos,fuzz,intrusive
@@ -47,13 +48,15 @@ notifications, a dashboard, Postgres, Redis, or Celery.
 
 ## Scope and safety
 
-This repository combines passive data sources with direct, read-only network
-checks. A default scan performs DNS lookups (including a small subdomain
-wordlist), connects to TLS endpoints, and may send HTTP requests to check
-takeover fingerprints. `--secrets` fetches common web paths, and `--nuclei`
-invokes the separately installed Nuclei scanner with intrusive template tags
-excluded. These checks do not attempt exploitation. Respect provider terms,
-rate limits, and the scope of the authorization you received.
+This repository combines passive data sources with direct network checks. A
+default scan performs DNS lookups (including a small subdomain wordlist),
+connects to TLS endpoints, and may send HTTP requests to check takeover
+fingerprints. `--secrets` fetches common web paths. `--nuclei` invokes the
+separately installed Nuclei scanner, which sends active probes; excluding the
+`dos`, `fuzz`, and `intrusive` tags is not a guarantee that every template is
+passive. Use it only against targets you are explicitly authorized to test.
+Respect provider terms, rate limits, and the scope of the authorization you
+received.
 
 ## Rimscan — the hosted platform
 
@@ -84,7 +87,7 @@ Rimscan adds:
 - **Email alerts** — notifications when new findings are discovered, instead
   of requiring manual checks.
 
-`rimscan-cli` is the same read-only scanning engine that powers Rimscan. If you
+`rimscan-cli` shares Rimscan's core reconnaissance engine. If you
 like what it finds, Rimscan is built for teams that want that coverage running
 continuously and automatically, not only when someone remembers to run a
 command.
