@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import logging
 import shutil
 import subprocess
 import tempfile
+from contextlib import nullcontext, redirect_stdout
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -130,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-banner",
         dest="quiet",
         action="store_true",
-        help="suppress the startup banner",
+        help="suppress the startup banner and scan progress output",
     )
     scan.add_argument("--verbose", action="store_true", help="enable diagnostic logging")
     return parser
@@ -146,14 +148,18 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet and not args.output:
         render_banner()
     try:
-        result = scan_domain(
-            args.domain,
-            authorized=args.authorized,
-            include_zone_transfer=args.zone_transfer,
-            include_secrets=args.secrets,
-            include_certs=not args.no_certs,
-            include_nuclei=args.nuclei,
+        output_context = (
+            redirect_stdout(io.StringIO()) if args.quiet or args.output else nullcontext()
         )
+        with output_context:
+            result = scan_domain(
+                args.domain,
+                authorized=args.authorized,
+                include_zone_transfer=args.zone_transfer,
+                include_secrets=args.secrets,
+                include_certs=not args.no_certs,
+                include_nuclei=args.nuclei,
+            )
     except (PermissionError, ValueError) as exc:
         parser.error(str(exc))
     rendered = json.dumps(result, indent=2, sort_keys=True)
