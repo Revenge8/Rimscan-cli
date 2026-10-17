@@ -201,6 +201,8 @@ class SubdomainEnumerator:
 
     def _is_valid_subdomain(self, name: str) -> bool:
         name = name.lower().strip()
+        if name.endswith("."):
+            name = name[:-1]
         if not name or (name != self.domain and not name.endswith("." + self.domain)):
             return False
         if " " in name or "@" in name or "*" in name:
@@ -262,6 +264,8 @@ class SubdomainEnumerator:
         url = f"https://otx.alienvault.com/api/v1/indicators/domain/{self.domain}/passive_dns"
         try:
             resp = self._otx_get(url)
+            if resp is None:
+                return subdomains
             resp.raise_for_status()
             for record in resp.json().get("passive_dns", []):
                 hostname = record.get("hostname", "").strip().lower()

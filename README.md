@@ -2,11 +2,10 @@
 
 # Rimscan CLI
 
-Rimscan CLI is a standalone, database-free passive reconnaissance tool for
-authorized security testing. It discovers subdomains, resolves DNS and CNAME
-chains, audits DNS and TLS configuration, checks for common exposed secrets,
-and identifies possible subdomain takeover candidates using public
-fingerprints.
+Rimscan CLI is a standalone, database-free reconnaissance tool for authorized
+security testing. It discovers subdomains, resolves DNS and CNAME chains,
+audits DNS and TLS configuration, checks for common exposed secrets, and
+identifies possible subdomain takeover candidates using public fingerprints.
 
 **Only scan domains you own or have explicit written permission to test.**
 This tool is not a license to scan arbitrary third-party infrastructure.
@@ -48,9 +47,13 @@ notifications, a dashboard, Postgres, Redis, or Celery.
 
 ## Scope and safety
 
-This repository intentionally performs discovery and standard read-only
-auditing. It does not attempt exploitation or intrusive testing. Respect
-provider terms, rate limits, and the scope of the authorization you received.
+This repository combines passive data sources with direct, read-only network
+checks. A default scan performs DNS lookups (including a small subdomain
+wordlist), connects to TLS endpoints, and may send HTTP requests to check
+takeover fingerprints. `--secrets` fetches common web paths, and `--nuclei`
+invokes the separately installed Nuclei scanner with intrusive template tags
+excluded. These checks do not attempt exploitation. Respect provider terms,
+rate limits, and the scope of the authorization you received.
 
 ## Rimscan — the hosted platform
 
@@ -81,11 +84,12 @@ Rimscan adds:
 - **Email alerts** — notifications when new findings are discovered, instead
   of requiring manual checks.
 
+`rimscan-cli` is the same read-only scanning engine that powers Rimscan. If you
+like what it finds, Rimscan is built for teams that want that coverage running
+continuously and automatically, not only when someone remembers to run a
+command.
 
-## Coming soon
-A hosted version with continuous monitoring, active vulnerability testing (Deep Scan), and a dashboard is in development.
-
-Star this repo to follow progress.
+Rimscan is available now at [rimscan.cloud](https://rimscan.cloud).
 
 ## Development
 

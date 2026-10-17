@@ -5,6 +5,8 @@ from rimscan_cli.cli import PASSIVE_NUCLEI_EXCLUDED_TAGS, build_parser, main, sc
 from rimscan_cli.banner import ASCII_BANNER, BANNER, UNICODE_BANNER, render_banner
 from recon.enumeration import SubdomainEnumerator
 from recon.secrets import SecretScanner
+from recon.takeover import TakeoverDetector, TakeoverFinding, TakeoverVerdict
+from recon.resolver import ResolutionResult, ResolutionStatus
 
 
 def test_help_requires_authorized_for_live_secret_scan():
@@ -51,6 +53,17 @@ def test_banner_prints_by_default_and_output_suppresses_it(monkeypatch, tmp_path
     output_file = tmp_path / "results.json"
     assert main(["scan", "example.com", "--output", str(output_file)]) == 0
     assert capsys.readouterr().err == ""
+
+
+def test_quiet_scan_keeps_stdout_machine_readable(monkeypatch, capsys):
+    def noisy_scan(*args, **kwargs):
+        print("enumerating...")
+        return {"domain": "example.com"}
+
+    monkeypatch.setattr("rimscan_cli.cli.scan_domain", noisy_scan)
+
+    assert main(["scan", "example.com", "--quiet"]) == 0
+    assert capsys.readouterr().out == '{\n  "domain": "example.com"\n}\n'
 
 
 def test_scan_domain_is_database_free():
@@ -109,3 +122,24 @@ def test_wayback_and_otx_timeouts_are_clean_and_continue(capsys):
     assert "crt.sh: 1 subdomains" in output
     assert "Retrying" not in output
     assert "api.example.com" in results
+
+
+def test_takeover_active_verification_has_complete_verdicts_and_service_mapping():
+    detector = TakeoverDetector(MagicMock())
+    finding = TakeoverFinding(
+        hostname="example.github.io",
+        verdict=TakeoverVerdict.VULNERABLE,
+        service="GitHub Pages",
+        cname_chain=["example.github.io"],
+        evidence="fingerprint match",
+    )
+    detector.check = MagicMock(return_value=finding)
+    verifier = MagicMock()
+    verifier.verify.return_value = True
+
+    result = detector.check_and_verify(
+        ResolutionResult("example.github.io", ResolutionStatus.CNAME),
+        verifier,
+    )
+    assert result.verdict is TakeoverVerdict.VERIFIED_VULNERABLE
+    verifier.verify.assert_called_once_with("github", username="example")
