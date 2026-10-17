@@ -119,10 +119,12 @@ class DNSAuditor:
             )
             return findings
 
+        found_record = False
         for r in answers:
             record = str(r).strip('"')
             if not record.lower().startswith("v=dmarc1"):
                 continue
+            found_record = True
             policy_match = re.search(r"\bp=(\w+)", record, re.I)
             policy = policy_match.group(1).lower() if policy_match else "none"
             severity_map = {
@@ -135,6 +137,10 @@ class DNSAuditor:
                     "dmarc", severity_map.get(policy, AuditSeverity.MEDIUM), domain,
                     f"DMARC policy p={policy}", record,
                 )
+            )
+        if not found_record:
+            findings.append(
+                DNSAuditFinding("dmarc", AuditSeverity.HIGH, domain, "No DMARC record found")
             )
         return findings
 

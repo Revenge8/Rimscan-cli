@@ -91,7 +91,11 @@ class DNSResolver:
             self._wildcard_ips = set()
             return False
 
-        common = set.intersection(*ip_sets) if ip_sets else set()
+        common = {
+            ip
+            for ip in set.union(*ip_sets)
+            if sum(ip in addresses for addresses in ip_sets) >= min_agreement
+        } if ip_sets else set()
         if common:
             self._wildcard_ips = common
             return True
