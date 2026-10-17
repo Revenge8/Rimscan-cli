@@ -24,5 +24,7 @@ rimscan-cli = "rimscan_cli.cli:main"
 py-modules = ["config"]
 
 [tool.setuptools.packages.find]
-include = ["rimscan_cli*", "recon*"]
+include = ["data*", "rimscan_cli*", "recon*"]
 
+[tool.setuptools.package-data]
+data = ["fingerprints.json"]
