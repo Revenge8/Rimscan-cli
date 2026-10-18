@@ -75,9 +75,9 @@ Rimscan adds:
 - **Continuous monitoring** — targets are automatically re-scanned roughly
   every two days, so new exposures can be caught without remembering to run
   the CLI again.
-- **Deep Scan (active testing)** — active crawling via Katana and payload-based
-  testing for vulnerabilities such as SQL injection and XSS. This is
-  intentionally outside the scope of this open-source CLI.
+- **Deep Scan (Pro plan only)** — active crawling via Katana and payload-based
+  testing for vulnerabilities such as SQL injection and XSS. Deep Scan is not
+  included in the free plan or this open-source CLI.
 - **Centralized dashboard** — domains, scan history, and findings in one place
   instead of scattered JSON output files.
 - **Findings management** — severity breakdowns, CVE identification, and a
