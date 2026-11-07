@@ -1,0 +1,10 @@
+[
+ {"cname":["elasticbeanstalk.com"],"fingerprint":"NXDOMAIN","http_status":null,"nxdomain":true,"service":"AWS/Elastic Beanstalk","vulnerable":true},
+ {"cname":["ghost.io"],"fingerprint":"Site unavailable\\.&#124;Failed to resolve DNS path for this host","http_status":null,"nxdomain":false,"service":"Ghost","vulnerable":true},
+ {"cname":["helprace.com"],"fingerprint":"HTTP_STATUS=301","http_status":301,"nxdomain":false,"service":"Helprace","vulnerable":true},
+ {"cname":["ngrok.io"],"fingerprint":"Tunnel .*.ngrok.io not found","http_status":null,"nxdomain":false,"service":"Ngrok","vulnerable":true},
+ {"cname":["52.16.160.97","https://x.vercel.com/"],"fingerprint":"nope","http_status":null,"nxdomain":false,"service":"Junk","vulnerable":true},
+ {"cname":["worksites.net"],"fingerprint":"Hello! Sorry, but the website you&rsquo;re looking for doesn&rsquo;t exist.","http_status":null,"nxdomain":false,"service":"Worksites","vulnerable":true},
+ {"cname":["canny.io"],"fingerprint":"Company Not Found` `There is no such company. Did you enter the right URL?","http_status":null,"nxdomain":false,"service":"Canny","vulnerable":true},
+ {"cname":["github.io"],"fingerprint":"There isn't a GitHub Pages site here.","http_status":null,"nxdomain":false,"service":"Github","vulnerable":false}
+]
