@@ -12,3 +12,6 @@ build/
 output/
 *.jsonl
 
+# scan results
+out.json
+results.json

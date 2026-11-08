@@ -5,26 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rimscan-cli"
 version = "1.0.0"
-description = "Standalone passive reconnaissance CLI"
+description = "External attack-surface reconnaissance for domains you own or are authorized to test."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { file = "LICENSE" }
-dependencies = [
-  "beautifulsoup4>=4.12.0",
-  "dnspython>=2.4.0",
-  "requests>=2.31.0",
-  "tqdm>=4.66.0",
-  "urllib3>=2.0.0",
-]
+dependencies = ["dnspython>=2.4", "requests>=2.31"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
 
 [project.scripts]
 rimscan-cli = "rimscan_cli.cli:main"
 
-[tool.setuptools]
-py-modules = ["config"]
-
 [tool.setuptools.packages.find]
-include = ["data*", "rimscan_cli*", "recon*"]
+include = ["rimscan_cli*"]
 
 [tool.setuptools.package-data]
-data = ["fingerprints.json"]
+rimscan_cli = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
