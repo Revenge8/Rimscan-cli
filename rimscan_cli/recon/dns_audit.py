@@ -4,45 +4,59 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import dns.exception
 import dns.query
 import dns.rcode
 import dns.resolver
 
+from rimscan_cli.recon._common import normalize_name
+from rimscan_cli.recon.severity import Severity
+
 __all__ = ["DNSAuditFinding", "DNSAuditor", "AuditSeverity"]
 
+# Kept so existing imports keep working; there is a single Severity enum.
+AuditSeverity = Severity
+
 _SPF_ALL = re.compile(r"^([+\-~?]?)all$", re.IGNORECASE)
+_DMARC_START = re.compile(r"^v=dmarc1\s*(?:;|$)", re.IGNORECASE)
 
 
-class AuditSeverity(Enum):
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    INFO = "info"
+def _is_spf(record: str) -> bool:
+    text = record.strip().lower()
+    return text == "v=spf1" or text.startswith("v=spf1 ")
+
+
+def _dmarc_tag(record: str, tag: str) -> Optional[str]:
+    match = re.search(rf"(?:^|;)\s*{re.escape(tag)}\s*=\s*(\w+)", record, re.IGNORECASE)
+    return match.group(1).lower() if match else None
 
 
 @dataclass
 class DNSAuditFinding:
     check: str
-    severity: AuditSeverity
+    severity: Severity
     domain: str
     detail: str
     record: str = ""
 
 
 class DNSAuditor:
-    def __init__(self, timeout: float = 5.0):
+    def __init__(self, timeout: float = 5.0, nameservers: Optional[Sequence[str]] = None):
         self.timeout = timeout
         self.resolver = dns.resolver.Resolver()
         self.resolver.timeout = timeout
         self.resolver.lifetime = timeout
+        if nameservers:
+            self.resolver.nameservers = list(nameservers)
+        # Lookups that failed (timeout, SERVFAIL, ...). A failed lookup produces no finding,
+        # so callers use this to tell "clean" apart from "could not check".
+        self.errors: List[str] = []
 
     def audit(self, domain: str, include_zone_transfer: bool = False) -> List[DNSAuditFinding]:
-        domain = domain.lower().strip(".")
+        domain = normalize_name(domain)
+        self.errors = []
         findings = self.check_spf(domain) + self.check_dmarc(domain)
         if include_zone_transfer:
             findings += self.check_zone_transfer(domain)
@@ -55,6 +69,7 @@ class DNSAuditor:
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
             return []
         except dns.exception.DNSException:
+            self.errors.append(f"TXT lookup for {name} failed")
             return None
         return [b"".join(rdata.strings).decode("utf-8", "replace") for rdata in answers]
 
@@ -62,53 +77,72 @@ class DNSAuditor:
         records = self._txt_records(domain)
         if records is None:
             return []
-        spf_records = [r for r in records if r.lower().startswith("v=spf1")]
+        spf_records = [r for r in records if _is_spf(r)]
         if not spf_records:
-            return [DNSAuditFinding("spf", AuditSeverity.MEDIUM, domain, "No SPF record found")]
+            return [DNSAuditFinding("spf", Severity.MEDIUM, domain, "No SPF record found")]
         if len(spf_records) > 1:
             return [DNSAuditFinding(
-                "spf", AuditSeverity.HIGH, domain,
+                "spf", Severity.HIGH, domain,
                 "Multiple SPF records; receivers treat this as a permanent error", spf_records[0],
             )]
 
         spf = spf_records[0]
-        for token in spf.split():
+        tokens = spf.split()[1:]
+        for token in tokens:
             match = _SPF_ALL.match(token)
             if not match:
                 continue
             qualifier = match.group(1) or "+"
             if qualifier in "+?":
                 return [DNSAuditFinding(
-                    "spf", AuditSeverity.HIGH, domain,
+                    "spf", Severity.HIGH, domain,
                     f"SPF allows any sender ({token.lower()})", spf,
                 )]
             if qualifier == "~":
                 return [DNSAuditFinding(
-                    "spf", AuditSeverity.MEDIUM, domain, "SPF soft-fail policy (~all)", spf
+                    "spf", Severity.MEDIUM, domain, "SPF soft-fail policy (~all)", spf
                 )]
             return []
+        # RFC 7208: without an "all" mechanism, redirect= supplies the policy instead.
+        if any(token.lower().startswith("redirect=") for token in tokens):
+            return []
         return [DNSAuditFinding(
-            "spf", AuditSeverity.MEDIUM, domain, "SPF record has no terminating 'all' mechanism", spf
+            "spf", Severity.MEDIUM, domain, "SPF record has no terminating 'all' mechanism", spf
         )]
 
     def check_dmarc(self, domain: str) -> List[DNSAuditFinding]:
-        records = self._txt_records(f"_dmarc.{domain}")
-        if records is None:
-            return []
-        dmarc = [r for r in records if r.lower().startswith("v=dmarc1")]
-        if not dmarc:
-            return [DNSAuditFinding("dmarc", AuditSeverity.HIGH, domain, "No DMARC record found")]
+        """Look for DMARC at the domain, then at each parent (subdomains inherit the policy).
 
-        record = dmarc[0]
-        match = re.search(r"\bp=(\w+)", record, re.IGNORECASE)
-        policy = match.group(1).lower() if match else "none"
+        Parents are walked down to two labels because there is no public-suffix list here.
+        """
+        labels = domain.split(".")
+        candidates = [".".join(labels[i:]) for i in range(max(len(labels) - 1, 1))]
+
+        record = ""
+        found_at = domain
+        for name in candidates:
+            records = self._txt_records(f"_dmarc.{name}")
+            if records is None:
+                return []
+            matching = [r for r in records if _DMARC_START.match(r.strip())]
+            if matching:
+                record, found_at = matching[0], name
+                break
+        else:
+            return [DNSAuditFinding("dmarc", Severity.HIGH, domain, "No DMARC record found")]
+
+        policy = _dmarc_tag(record, "p") or "none"
+        suffix = ""
+        if found_at != domain:
+            policy = _dmarc_tag(record, "sp") or policy
+            suffix = f" (inherited from {found_at})"
         if policy == "none":
             return [DNSAuditFinding(
-                "dmarc", AuditSeverity.HIGH, domain, "DMARC policy is p=none (monitoring only)", record
+                "dmarc", Severity.HIGH, domain, f"DMARC policy is p=none (monitoring only){suffix}", record
             )]
         if policy == "quarantine":
             return [DNSAuditFinding(
-                "dmarc", AuditSeverity.MEDIUM, domain, "DMARC policy is p=quarantine", record
+                "dmarc", Severity.MEDIUM, domain, f"DMARC policy is p=quarantine{suffix}", record
             )]
         return []
 
@@ -129,7 +163,7 @@ class DNSAuditor:
             for address in addresses:
                 if self._axfr_allowed(address, domain):
                     findings.append(DNSAuditFinding(
-                        "zone_transfer", AuditSeverity.CRITICAL, domain,
+                        "zone_transfer", Severity.CRITICAL, domain,
                         f"Zone transfer (AXFR) allowed on {ns_host} ({address})", ns_host,
                     ))
                     break
