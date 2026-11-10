@@ -1,21 +1,48 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rimscan-cli"
-version = "1.0.0"
+dynamic = ["version"]
 description = "External attack-surface reconnaissance for domains you own or are authorized to test."
 readme = "README.md"
-requires-python = ">=3.9"
-license = { file = "LICENSE" }
-dependencies = ["dnspython>=2.4", "requests>=2.31"]
+requires-python = ">=3.10"
+license = "Elastic-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Rimscan" }]
+keywords = ["security", "reconnaissance", "attack-surface", "subdomain-takeover", "dns"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "certifi>=2023.7.22",
+    "dnspython>=2.4",
+    "requests>=2.31",
+    "urllib3>=2.0",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.urls]
+Homepage = "https://rimscan.cloud"
+Repository = "https://github.com/Revenge8/Rimscan-cli"
+Issues = "https://github.com/Revenge8/Rimscan-cli/issues"
 
 [project.scripts]
 rimscan-cli = "rimscan_cli.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "rimscan_cli.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["rimscan_cli*"]
@@ -25,3 +52,7 @@ rimscan_cli = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"

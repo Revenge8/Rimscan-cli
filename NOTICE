@@ -1,0 +1,8 @@
+rimscan-cli
+Copyright (c) 2026 Rimscan. Licensed under the Elastic License 2.0 (see LICENSE).
+
+Third-party data
+----------------
+rimscan_cli/data/fingerprints.json is derived from the can-i-take-over-xyz project
+(https://github.com/EdOverflow/can-i-take-over-xyz). The fingerprints remain subject to
+that project's license and terms. Review them before redistributing the data file.
