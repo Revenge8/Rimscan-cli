@@ -40,7 +40,7 @@ def render_banner(stream: TextIO | None = None) -> None:
     output = stream or sys.stderr
     print(_banner_for(output), file=output)
     print(f"rimscan-cli v{__version__} | rimscan.cloud", file=output)
-    print("passive reconnaissance, done right", file=output)
+    print("external attack-surface reconnaissance", file=output)
     print(file=output)
 
 

@@ -1,0 +1,64 @@
+{
+  "certificate_findings": [
+    {
+      "check": "expiring",
+      "detail": "Certificate expires in 9 days",
+      "expires": "2026-12-01T08:00:00+00:00",
+      "hostname": "www.example.com",
+      "severity": "high"
+    }
+  ],
+  "dns_findings": [
+    {
+      "check": "dmarc",
+      "detail": "DMARC policy is p=none (monitoring only)",
+      "domain": "example.com",
+      "record": "v=DMARC1; p=none; rua=mailto:dmarc@example.com",
+      "severity": "high"
+    }
+  ],
+  "domain": "example.com",
+  "incomplete": false,
+  "resolutions": [
+    {
+      "a_records": ["93.184.216.34"],
+      "cname_chain": [],
+      "cname_target": null,
+      "error_detail": null,
+      "hostname": "example.com",
+      "status": "a_record"
+    },
+    {
+      "a_records": ["93.184.216.35"],
+      "cname_chain": ["old-site.ghost.io"],
+      "cname_target": "old-site.ghost.io",
+      "error_detail": null,
+      "hostname": "blog.example.com",
+      "status": "cname"
+    }
+  ],
+  "scanned_at": "2026-11-10T12:00:00+00:00",
+  "schema_version": 1,
+  "sources": {
+    "anubis": "ok",
+    "certspotter": "ok",
+    "crt.sh": "ok",
+    "otx": "ok",
+    "rapiddns": "failed (HTTPError)",
+    "wayback": "ok"
+  },
+  "subdomains": ["blog.example.com", "www.example.com"],
+  "takeover_findings": [
+    {
+      "cname_chain": ["old-site.ghost.io"],
+      "evidence": "HTTP 404 body matches the Ghost unclaimed-resource page",
+      "hostname": "blog.example.com",
+      "service": "Ghost",
+      "verdict": "vulnerable"
+    }
+  ],
+  "tool": {"name": "rimscan-cli", "version": "1.0.0"},
+  "warnings": ["enumeration sources failed or timed out: rapiddns"],
+  "wildcard_dns": false,
+  "wildcard_filtered": 0
+}
