@@ -6,13 +6,15 @@ import html
 import ipaddress
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Pattern, Tuple, Union
+from typing import List, Optional, Pattern, Sequence, Tuple, Union
 
 import requests
 
+from rimscan_cli.recon._common import all_public
 from rimscan_cli.recon._http import make_session, read_capped
 from rimscan_cli.recon.resolver import ResolutionResult, ResolutionStatus
 
@@ -27,6 +29,20 @@ __all__ = [
 
 DEFAULT_FINGERPRINTS_PATH = Path(__file__).resolve().parents[1] / "data" / "fingerprints.json"
 _MAX_BODY_BYTES = 256 * 1024
+
+# The bundled upstream list leaves `cname` empty for many takeover-prone services, and
+# matching is by CNAME suffix, so those services could never be detected. These suffixes
+# are added to the upstream ones (matched by the entry's `service` name). Services that
+# are not identified by a CNAME at all (Digital Ocean NS delegation, for one) stay out.
+_SUPPLEMENTAL_CNAMES = {
+    "Campaign Monitor": ("createsend.com",),
+    "Canny": ("canny.io",),
+    "Cargo Collective": ("cargocollective.com",),
+    "Pantheon": ("pantheonsite.io",),
+    "Pingdom": ("stats.pingdom.com",),
+    "Readthedocs": ("readthedocs.io",),
+    "Short.io": ("short.io",),
+}
 
 
 class TakeoverVerdict(Enum):
@@ -60,9 +76,11 @@ class Fingerprint:
         status = entry.get("http_status")
         if text.startswith("HTTP_STATUS="):
             status, text = int(text.split("=", 1)[1]), ""
+        service = entry.get("service", "unknown")
+        cnames = _usable_cnames(entry.get("cname") or []) + list(_SUPPLEMENTAL_CNAMES.get(service, ()))
         return cls(
-            service=entry.get("service", "unknown"),
-            cnames=tuple(_usable_cnames(entry.get("cname", []))),
+            service=service,
+            cnames=tuple(dict.fromkeys(cnames)),
             vulnerable=bool(entry.get("vulnerable")),
             nxdomain=bool(entry.get("nxdomain")),
             pattern=_compile_fingerprint(text),
@@ -127,14 +145,24 @@ class FingerprintDatabase:
 class TakeoverDetector:
     """Flag CNAMEs that point at third-party services with an unclaimed resource.
 
-    Only hosts whose CNAME chain matches a known service are checked, and each such
-    host receives at most one HTTPS and one HTTP GET request.
+    Only hosts whose CNAME chain matches a known service are checked. Each such host
+    receives at most one HTTPS and one HTTP GET request: the session does not retry and
+    redirects are not followed, so the response is the host's own. Hosts that resolve to
+    a non-public address are never contacted.
     """
 
-    def __init__(self, database: FingerprintDatabase, timeout: float = 10.0):
+    def __init__(self, database: FingerprintDatabase, timeout: float = 10.0, max_workers: int = 8):
         self.db = database
         self.timeout = timeout
-        self._session = make_session(retries=1)
+        self.max_workers = max_workers
+        self._session = make_session(retries=0)
+
+    def check_many(self, results: Sequence[ResolutionResult]) -> List[Optional[TakeoverFinding]]:
+        """Check hosts concurrently; findings follow the order of `results`."""
+        if not results:
+            return []
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(results))) as pool:
+            return list(pool.map(self.check, results))
 
     def check(self, result: ResolutionResult) -> Optional[TakeoverFinding]:
         chain = result.cname_chain
@@ -179,6 +207,11 @@ class TakeoverDetector:
                 result, TakeoverVerdict.LIKELY, fp.service,
                 f"points at takeover-prone {fp.service}; no automatic fingerprint, verify manually",
             )
+        if result.a_records and not all_public(result.a_records):
+            return self._finding(
+                result, TakeoverVerdict.UNKNOWN_SERVICE, fp.service,
+                "resolves to a non-public address; not probed",
+            )
         return self._check_http(result, fp)
 
     def _check_http(self, result: ResolutionResult, fp: Fingerprint) -> TakeoverFinding:
@@ -213,10 +246,12 @@ class TakeoverDetector:
         )
 
     def _fetch(self, hostname: str) -> Optional[Tuple[int, str]]:
+        # Redirects are not followed: status-only fingerprints (e.g. an expected 301) would
+        # otherwise never match, and we would read pages from hosts outside the target.
         for scheme in ("https", "http"):
             try:
                 response = self._session.get(
-                    f"{scheme}://{hostname}", timeout=self.timeout, stream=True
+                    f"{scheme}://{hostname}", timeout=self.timeout, stream=True, allow_redirects=False
                 )
                 return response.status_code, read_capped(response, _MAX_BODY_BYTES)
             except requests.RequestException:
