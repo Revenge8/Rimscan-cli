@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -10,8 +12,11 @@ from rimscan_cli import __version__
 
 USER_AGENT = f"rimscan-cli/{__version__} (+https://rimscan.cloud)"
 
+_CHARSET = re.compile(r"charset=\s*[\"']?([\w.:-]+)", re.IGNORECASE)
+
 
 def make_session(retries: int = 2) -> requests.Session:
+    """Build a session. Pass ``retries=0`` when each request must be sent at most once."""
     retry = Retry(
         total=retries,
         backoff_factor=1.0,
@@ -28,6 +33,17 @@ def make_session(retries: int = 2) -> requests.Session:
     return session
 
 
+def _declared_charset(response: requests.Response) -> str:
+    """Charset from the Content-Type header, or UTF-8.
+
+    ``response.encoding`` is not used: for ``text/*`` without a charset, requests guesses
+    ISO-8859-1, which garbles the non-Latin fingerprints and secrets we match against.
+    """
+    headers = getattr(response, "headers", None) or {}
+    match = _CHARSET.search(headers.get("Content-Type", ""))
+    return match.group(1).strip("\"'") if match else "utf-8"
+
+
 def read_capped(response: requests.Response, limit: int) -> str:
     """Read at most `limit` bytes of a streamed response and decode them."""
     body = bytearray()
@@ -36,4 +52,8 @@ def read_capped(response: requests.Response, limit: int) -> str:
         if len(body) >= limit:
             break
     response.close()
-    return bytes(body[:limit]).decode(response.encoding or "utf-8", errors="replace")
+    data = bytes(body[:limit])
+    try:
+        return data.decode(_declared_charset(response), errors="replace")
+    except LookupError:
+        return data.decode("utf-8", errors="replace")

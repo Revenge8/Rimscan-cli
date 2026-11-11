@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from rimscan_cli.recon import cert_audit
 from rimscan_cli.recon.cert_audit import CertAuditor, CertSeverity
 
 
@@ -50,9 +51,10 @@ def test_hosts_without_https_are_not_findings(exc):
     assert a.audit_host("example.com") == []
 
 
-def test_unsupported_protocol_is_reported():
-    err = ssl.SSLError(1, "[SSL: UNSUPPORTED_PROTOCOL] unsupported protocol")
-    err.reason = "UNSUPPORTED_PROTOCOL"
+@pytest.mark.parametrize("reason", ["UNSUPPORTED_PROTOCOL", "TLSV1_ALERT_PROTOCOL_VERSION"])
+def test_unsupported_protocol_is_reported(reason):
+    err = ssl.SSLError(1, f"[SSL: {reason}] protocol")
+    err.reason = reason
     a = CertAuditor()
     a._handshake = raising(err)
     assert a.audit_host("example.com")[0].check == "protocol"
@@ -81,3 +83,10 @@ def test_audit_many_dedupes_and_caps(caplog):
     a.audit_many(["a.example.com", "a.example.com", "b.example.com", "c.example.com"], max_hosts=2)
     assert sorted(seen) == ["a.example.com", "b.example.com"]
     assert "limited to 2 of 3" in caplog.text
+
+
+def test_context_is_pinned_so_results_do_not_depend_on_python_version():
+    context = cert_audit._context()
+    assert context.minimum_version == ssl.TLSVersion.TLSv1_2
+    assert not context.verify_flags & ssl.VERIFY_X509_STRICT
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname

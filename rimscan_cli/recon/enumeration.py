@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, wait
+import threading
+import time
 from typing import Callable, Dict, Iterable, List, Optional, Set
 from urllib.parse import urlparse
 
-import requests
-
+from rimscan_cli.recon._common import is_valid_hostname, normalize_name
 from rimscan_cli.recon._http import make_session, read_capped
 from rimscan_cli.recon.resolver import DNSResolver
 
@@ -29,14 +29,13 @@ BRUTEFORCE_WORDLIST = (
     "uat", "qa", "preview",
 )
 
-_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _WAYBACK_MAX_BYTES = 25 * 1024 * 1024
 _RAPIDDNS_LINK = re.compile(r'target="_blank">([^<]+)</a>')
 
 
 class SubdomainEnumerator:
     def __init__(self, domain: str, timeout: float = 10.0):
-        self.domain = domain.lower().strip().strip(".")
+        self.domain = normalize_name(domain)
         self.timeout = (min(timeout, 5.0), timeout)
         self.session = make_session()
         self.source_status: Dict[str, str] = {}
@@ -53,15 +52,12 @@ class SubdomainEnumerator:
 
     def _accept(self, name: str) -> Optional[str]:
         """Normalize a candidate; return it only if it is a valid subdomain of the target."""
-        name = name.strip().lower().rstrip(".")
+        name = normalize_name(name)
         if name.startswith("*."):
             name = name[2:]
-        if not name.endswith("." + self.domain) or len(name) > 253:
+        if not name.endswith("." + self.domain) or not is_valid_hostname(name):
             return None
-        labels = name.split(".")
-        if all(_LABEL.fullmatch(label) for label in labels):
-            return name
-        return None
+        return name
 
     def _collect(self, names: Iterable[str]) -> Set[str]:
         return {valid for valid in map(self._accept, names) if valid}
@@ -142,34 +138,47 @@ class SubdomainEnumerator:
 
         A slow or failing source never blocks the others; its outcome is recorded in
         `source_status`. The target domain itself is not included in the result.
+
+        Each source runs in a daemon thread, so one that is still stuck after
+        `source_timeout` cannot keep the interpreter alive at exit. Any exception a source
+        raises (including a malformed response) is contained to that source.
         """
         chosen = list(sources) if sources else list(DEFAULT_SOURCES)
         unknown = [name for name in chosen if name not in self._sources]
         if unknown:
             raise ValueError(f"unknown source(s): {', '.join(unknown)}")
 
-        found: Set[str] = set()
-        pool = ThreadPoolExecutor(max_workers=len(chosen))
-        futures = {pool.submit(self._sources[name]): name for name in chosen}
-        done, pending = wait(futures, timeout=source_timeout)
-        pool.shutdown(wait=False, cancel_futures=True)
+        results: Dict[str, Set[str]] = {}
+        errors: Dict[str, BaseException] = {}
 
-        for future in done:
-            name = futures[future]
+        def worker(name: str) -> None:
             try:
-                names = future.result()
-            except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-                self.source_status[name] = f"failed ({type(exc).__name__})"
-                logger.debug("%s failed", name, exc_info=True)
-                names = set()
+                results[name] = set(self._sources[name]())
+            except Exception as exc:  # noqa: BLE001 - one bad source must not stop the scan
+                errors[name] = exc
+
+        threads = {
+            name: threading.Thread(target=worker, args=(name,), name=f"enum-{name}", daemon=True)
+            for name in chosen
+        }
+        for thread in threads.values():
+            thread.start()
+        deadline = time.monotonic() + source_timeout
+        for thread in threads.values():
+            thread.join(max(0.0, deadline - time.monotonic()))
+
+        found: Set[str] = set()
+        for name in chosen:
+            names: Set[str] = set()
+            if threads[name].is_alive():
+                self.source_status[name] = "timed out"
+            elif name in errors:
+                self.source_status[name] = f"failed ({type(errors[name]).__name__})"
+                logger.debug("%s failed", name, exc_info=errors[name])
             else:
+                names = results.get(name, set())
                 self.source_status[name] = "ok"
             found |= names
             if on_source_done:
                 on_source_done(name, len(names), self.source_status[name])
-        for future in pending:
-            name = futures[future]
-            self.source_status[name] = "timed out"
-            if on_source_done:
-                on_source_done(name, 0, "timed out")
         return found
