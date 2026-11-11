@@ -1,4 +1,5 @@
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -85,14 +86,27 @@ def test_run_isolates_failing_source_and_reports_status():
     assert len(events) == 2
 
 
-def test_run_times_out_slow_source():
+def test_run_survives_a_malformed_response_from_a_source():
+    e = enumerator(lambda url, **kw: FakeResponse({"error": "rate limited"}))
+    e._sources = {"crt.sh": e.from_crtsh, "good": lambda: {"a.example.com"}}
+    assert e.run(["crt.sh", "good"]) == {"a.example.com"}
+    assert e.source_status["crt.sh"] == "failed (AttributeError)"
+
+
+def test_run_times_out_slow_source_without_leaving_a_blocking_thread():
     import time
 
+    release = threading.Event()
     e = SubdomainEnumerator("example.com")
-    e._sources = {"slow": lambda: time.sleep(2) or {"x.example.com"}, "fast": lambda: {"a.example.com"}}
+    e._sources = {"slow": lambda: release.wait(5) or {"x.example.com"}, "fast": lambda: {"a.example.com"}}
+    started = time.monotonic()
     found = e.run(["slow", "fast"], source_timeout=0.2)
+    assert time.monotonic() - started < 2
     assert found == {"a.example.com"}
     assert e.source_status["slow"] == "timed out"
+    stuck = [t for t in threading.enumerate() if t.name == "enum-slow"]
+    assert stuck and all(t.daemon for t in stuck)
+    release.set()
 
 
 def test_unknown_source_rejected():

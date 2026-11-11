@@ -37,10 +37,18 @@ def auditor(table):
     ("v=spf1 +all", Sev.HIGH),
     ("v=spf1 all", Sev.HIGH),
     ("v=spf1 include:x.example", Sev.MEDIUM),
+    ("v=spf1 redirect=_spf.example.net", None),
+    ("v=spf1 include:x.example redirect=_spf.example.net", None),
+    ("v=spf1 redirect=_spf.example.net ~all", Sev.MEDIUM),
 ])
 def test_spf_policies(spf, severity):
     found = auditor({("example.com", "TXT"): [txt(spf)]}).check_spf("example.com")
     assert [f.severity for f in found] == ([severity] if severity else [])
+
+
+def test_spf_prefix_lookalike_is_not_an_spf_record():
+    found = auditor({("example.com", "TXT"): [txt("v=spf10 -all")]}).check_spf("example.com")
+    assert [f.detail for f in found] == ["No SPF record found"]
 
 
 def test_spf_split_across_txt_strings():
@@ -57,9 +65,18 @@ def test_multiple_spf_records_flagged():
     assert auditor(table).check_spf("example.com")[0].severity is Sev.HIGH
 
 
-def test_timeouts_do_not_produce_findings():
+def test_timeouts_do_not_produce_findings_but_are_recorded():
     a = auditor({("example.com", "TXT"): "timeout", ("_dmarc.example.com", "TXT"): "timeout"})
-    assert a.check_spf("example.com") == [] and a.check_dmarc("example.com") == []
+    assert a.audit("example.com") == []
+    assert len(a.errors) == 2
+
+
+def test_clean_audit_has_no_errors():
+    a = auditor({
+        ("example.com", "TXT"): [txt("v=spf1 -all")],
+        ("_dmarc.example.com", "TXT"): [txt("v=DMARC1; p=reject")],
+    })
+    assert a.audit("example.com") == [] and a.errors == []
 
 
 @pytest.mark.parametrize("record,severity", [
@@ -74,6 +91,26 @@ def test_dmarc_policies(record, severity):
 
 def test_missing_dmarc():
     assert auditor({}).check_dmarc("example.com")[0].detail == "No DMARC record found"
+
+
+def test_subdomain_inherits_parent_dmarc():
+    a = auditor({("_dmarc.example.com", "TXT"): [txt("v=DMARC1; p=reject")]})
+    assert a.check_dmarc("sub.example.com") == []
+
+
+def test_subdomain_policy_tag_overrides_p():
+    a = auditor({("_dmarc.example.com", "TXT"): [txt("v=DMARC1; p=reject; sp=none")]})
+    (finding,) = a.check_dmarc("sub.example.com")
+    assert finding.severity is Sev.HIGH and "inherited from example.com" in finding.detail
+
+
+def test_subdomain_without_any_dmarc_is_reported():
+    assert auditor({}).check_dmarc("sub.example.com")[0].detail == "No DMARC record found"
+
+
+def test_dmarc_lookup_failure_on_subdomain_is_not_a_finding():
+    a = auditor({("_dmarc.sub.example.com", "TXT"): "timeout"})
+    assert a.check_dmarc("sub.example.com") == [] and a.errors
 
 
 def test_zone_transfer_reads_only_first_message(monkeypatch):
@@ -106,3 +143,7 @@ def test_zone_transfer_refused(monkeypatch):
 
     monkeypatch.setattr(dns_audit.dns.query, "xfr", refused)
     assert a.check_zone_transfer("example.com") == []
+
+
+def test_custom_nameservers_are_used():
+    assert DNSAuditor(nameservers=["9.9.9.9"]).resolver.nameservers == ["9.9.9.9"]
