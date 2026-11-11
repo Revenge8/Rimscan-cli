@@ -13,6 +13,8 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 import dns.exception
 import dns.resolver
 
+from rimscan_cli.recon._common import normalize_name
+
 __all__ = ["ResolutionStatus", "ResolutionResult", "DNSResolver"]
 
 
@@ -63,10 +65,6 @@ class ResolutionResult:
         )
 
 
-def _normalize(name: str) -> str:
-    return name.lower().strip().strip(".")
-
-
 class DNSResolver:
     def __init__(
         self,
@@ -92,8 +90,11 @@ class DNSResolver:
 
         CDN-backed wildcards can answer with different addresses for every label, so
         the probes only have to resolve, not agree. Call this before resolving hosts.
+
+        Limitation: a real host that shares its addresses or CNAME target with the
+        wildcard cannot be told apart from wildcard noise and is reported as WILDCARD.
         """
-        domain = _normalize(domain)
+        domain = normalize_name(domain)
         self._wildcard_domain = None
         self._wildcard_ips = set()
         self._wildcard_cnames = set()
@@ -157,7 +158,7 @@ class DNSResolver:
 
     def _resolve_uncached(self, hostname: str, max_chain_depth: int = 10) -> ResolutionResult:
         chain: List[str] = []
-        current = _normalize(hostname)
+        current = normalize_name(hostname)
         visited = {current}
 
         while True:
@@ -166,7 +167,7 @@ class DNSResolver:
                 break
             if state != "ok":
                 return self._failure(hostname, chain, state)
-            target = _normalize(str(records[0].target))
+            target = normalize_name(str(records[0].target))
             if target in visited:
                 return ResolutionResult(
                     hostname, ResolutionStatus.ERROR, cname_chain=chain,
@@ -197,7 +198,7 @@ class DNSResolver:
                 )
             return ResolutionResult(hostname, ResolutionStatus.NO_RECORD)
 
-        if self._is_wildcard_answer(_normalize(hostname), ips, chain):
+        if self._is_wildcard_answer(normalize_name(hostname), ips, chain):
             return ResolutionResult(
                 hostname, ResolutionStatus.WILDCARD, a_records=ips, cname_chain=chain
             )
@@ -211,7 +212,7 @@ class DNSResolver:
     # -- public API --------------------------------------------------------
 
     def resolve_one(self, hostname: str, max_chain_depth: int = 10) -> ResolutionResult:
-        key = _normalize(hostname)
+        key = normalize_name(hostname)
         cached = self._cache.get(key)
         if cached is not None:
             result = copy.deepcopy(cached)
@@ -229,10 +230,3 @@ class DNSResolver:
             return []
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(names))) as pool:
             return list(pool.map(self.resolve_one, names))
-
-    @staticmethod
-    def categorize(results: Sequence[ResolutionResult]) -> Dict[ResolutionStatus, List[ResolutionResult]]:
-        buckets: Dict[ResolutionStatus, List[ResolutionResult]] = {s: [] for s in ResolutionStatus}
-        for result in results:
-            buckets[result.status].append(result)
-        return buckets
