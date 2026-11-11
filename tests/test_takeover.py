@@ -1,6 +1,8 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import requests
 
 from rimscan_cli.recon.resolver import ResolutionResult, ResolutionStatus as S
 from rimscan_cli.recon.takeover import FingerprintDatabase, TakeoverDetector, TakeoverVerdict as V
@@ -13,9 +15,10 @@ def detector():
     return TakeoverDetector(FingerprintDatabase(FIXTURE))
 
 
-def cname(host, chain, status=S.CNAME):
-    return ResolutionResult(host, status, a_records=["1.2.3.4"] if status is S.CNAME else [],
-                            cname_chain=chain, cname_target=chain[-1])
+def cname(host, chain, status=S.CNAME, ips=None):
+    if ips is None:
+        ips = ["1.2.3.4"] if status is S.CNAME else []
+    return ResolutionResult(host, status, a_records=ips, cname_chain=chain, cname_target=chain[-1])
 
 
 def serve(detector, status, body):
@@ -27,6 +30,17 @@ def serve(detector, status, body):
 
     detector._fetch = fetch
     return calls
+
+
+class Resp:
+    def __init__(self, status=200, text=""):
+        self.status_code, self._text, self.headers = status, text, {}
+
+    def iter_content(self, chunk_size=0):
+        yield self._text.encode()
+
+    def close(self):
+        pass
 
 
 def test_database_ignores_urls_and_ip_cnames():
@@ -100,3 +114,66 @@ def test_non_vulnerable_service_does_not_make_requests(detector):
 def test_wildcard_results_skipped(detector):
     res = ResolutionResult("a.example.com", S.WILDCARD, a_records=["1.1.1.1"], cname_chain=["x.ghost.io"])
     assert detector.check(res) is None
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.5", "169.254.169.254", "::1"])
+def test_hosts_resolving_to_non_public_addresses_are_not_probed(detector, ip):
+    calls = serve(detector, 200, "Failed to resolve DNS path for this host")
+    finding = detector.check(cname("a.example.com", ["x.ghost.io"], ips=[ip]))
+    assert finding.verdict is V.UNKNOWN_SERVICE and "not probed" in finding.evidence
+    assert calls == []
+
+
+def test_fetch_does_not_follow_redirects_and_tries_https_first(detector):
+    seen = []
+
+    def get(url, **kwargs):
+        seen.append((url, kwargs))
+        return Resp(301)
+
+    detector._session = SimpleNamespace(get=get)
+    assert detector._fetch("a.example.com") == (301, "")
+    assert [url for url, _ in seen] == ["https://a.example.com"]
+    assert seen[0][1]["allow_redirects"] is False
+
+
+def test_fetch_falls_back_to_http_once_when_https_fails(detector):
+    urls = []
+
+    def get(url, **kwargs):
+        urls.append(url)
+        if url.startswith("https://"):
+            raise requests.ConnectionError()
+        return Resp(404, "x")
+
+    detector._session = SimpleNamespace(get=get)
+    assert detector._fetch("a.example.com") == (404, "x")
+    assert urls == ["https://a.example.com", "http://a.example.com"]
+
+
+def test_fetch_gives_up_after_one_attempt_per_scheme(detector):
+    urls = []
+
+    def get(url, **kwargs):
+        urls.append(url)
+        raise requests.ConnectTimeout()
+
+    detector._session = SimpleNamespace(get=get)
+    assert detector._fetch("a.example.com") is None
+    assert len(urls) == 2
+
+
+def test_probe_session_never_retries(detector):
+    assert detector._session.get_adapter("https://a.example.com").max_retries.total == 0
+
+
+def test_check_many_keeps_order(detector):
+    serve(detector, 200, "Failed to resolve DNS path for this host")
+    results = [
+        cname("a.example.com", ["x.ghost.io"]),
+        ResolutionResult("b.example.com", S.A_RECORD, a_records=["1.2.3.4"]),
+        cname("c.example.com", ["x.elasticbeanstalk.com"], S.DANGLING_CNAME),
+    ]
+    findings = detector.check_many(results)
+    assert [f.verdict if f else None for f in findings] == [V.VULNERABLE, None, V.VULNERABLE]
+    assert detector.check_many([]) == []
