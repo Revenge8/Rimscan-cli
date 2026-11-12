@@ -36,7 +36,8 @@ def _positive_int(value: str) -> int:
 
 
 def _csv(value: str) -> List[str]:
-    return [part.strip() for part in value.split(",") if part.strip()]
+    """Split a comma-separated list, dropping blanks and repeats (order is kept)."""
+    return list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
 
 
 def build_parser() -> argparse.ArgumentParser:
