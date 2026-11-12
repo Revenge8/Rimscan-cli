@@ -50,16 +50,16 @@ for the shape of the output.
 | `--secrets` | Fetch a fixed list of well-known paths (`/.env`, `/config.js`, ...) and look for exposed credentials. |
 | `--zone-transfer` | Attempt an AXFR against the domain's nameservers. |
 | `--nuclei` | Run [Nuclei](https://github.com/projectdiscovery/nuclei) (installed separately) with `-etags dos,fuzz,intrusive`. |
-| `--nuclei-rate-limit N` | Nuclei requests per second (default 75). |
+| `--nuclei-rate-limit N` | Nuclei requests per second (default 75, at least 1). |
 | `--include-third-party` | Let `--secrets` and `--nuclei` also probe hosts that CNAME to third-party services. Skipped by default. |
 | `--bruteforce` | Also resolve a short list of common subdomain names. |
 | `--no-certs` | Skip the TLS certificate audit. |
 | `--sources LIST` | Comma-separated enumeration sources (default: all). |
 | `--resolver IPS` | Comma-separated DNS resolver addresses. Applies to DNS lookups only; TLS and HTTP probes use the system resolver. |
-| `--timeout SECONDS` | Network timeout (default 10). |
+| `--timeout SECONDS` | Network timeout, greater than 0 (default 10). |
 | `-o`, `--output FILE` | Write JSON to a file instead of stdout. If the file cannot be written, the results are printed to stdout instead. |
 | `--fail-on LEVEL` | Exit with status 1 if any finding is at or above `info`, `low`, `medium`, `high` or `critical`. |
-| `-q`, `--quiet` | No banner, progress or summary. |
+| `-q`, `--quiet` | No banner, progress, summary or log warnings on stderr. |
 | `--no-banner` | Do not print the banner. |
 | `--verbose` | Debug logging. |
 
@@ -74,10 +74,11 @@ for the shape of the output.
 | 130 | Interrupted. |
 
 A scan is **incomplete** when every enumeration source failed or timed out (and
-`--bruteforce` was not used), or when a DNS lookup in the DNS audit failed. In that case
-"no findings" does not mean the target is clean: the JSON has `"incomplete": true`, the
-reasons are listed under `warnings`, and CI runs using `--fail-on` exit with status 3
-instead of passing silently.
+`--bruteforce` was not used), when a DNS lookup in the DNS audit failed, or when at least
+half of the discovered hosts could not be resolved (timeouts or errors). A smaller number
+of failed lookups only adds a warning. In that case "no findings" does not mean the target
+is clean: the JSON has `"incomplete": true`, the reasons are listed under `warnings`, and
+CI runs using `--fail-on` exit with status 3 instead of passing silently.
 
 ### Output
 
@@ -126,11 +127,14 @@ Safeguards that apply to every active step:
   probed, so a subdomain pointed at `127.0.0.1` or a cloud metadata address cannot make the
   tool contact internal services.
 - `--secrets` and `--nuclei` skip hosts that CNAME to a known third-party service
-  (GitHub Pages, Heroku, and so on), because those servers are not yours. Pass
+  (the takeover fingerprints plus a built-in list of hosting platforms such as GitHub Pages,
+  Heroku, Netlify and Shopify), because those servers are not yours. Pass
   `--include-third-party` only if you are authorized to test them. The list of hosts that
   were probed or skipped is in `active_targets` and `skipped_hosts`.
+- `--zone-transfer` never sends a request to a nameserver whose address is non-public.
+- Redirect responses are never treated as file content by the secret scan.
 - Caps: the TLS audit covers at most 100 hosts and the secret scan at most 50; a warning is
-  logged when a cap truncates the list.
+  added to the JSON `warnings` (and logged) when a cap truncates the list.
 
 Use it only against targets you are explicitly authorized to test. Respect
 provider terms, rate limits, and the scope of the authorization you received.
@@ -162,6 +166,9 @@ notifications, a dashboard, Postgres, Redis, or Celery.
   pattern is reported only when "aws" or "secret" appears next to it and its entropy is high.
 - **Enumeration sources fail often** (rate limits are common). Check `sources` and
   `warnings` in the output.
+- **DNS rebinding.** Non-public addresses are rejected using the lookup done during the scan.
+  A host's DNS could answer differently when the probe connects; the tool does not pin the
+  connection to the checked address.
 
 ## Rimscan, the hosted platform
 

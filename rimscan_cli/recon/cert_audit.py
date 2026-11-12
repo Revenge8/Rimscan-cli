@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import socket
 import ssl
@@ -15,12 +16,14 @@ import certifi
 from rimscan_cli.recon._common import normalize_name
 from rimscan_cli.recon.severity import Severity
 
-__all__ = ["CertAuditFinding", "CertAuditor", "CertSeverity"]
+__all__ = ["CertAuditFinding", "CertAuditor", "CertSeverity", "MAX_HOSTS"]
 
 # Kept so existing imports keep working; there is a single Severity enum.
 CertSeverity = Severity
 
 logger = logging.getLogger(__name__)
+
+MAX_HOSTS = 100
 
 # OpenSSL X509_V_ERR_* codes reported by ssl.SSLCertVerificationError.verify_code.
 _VERIFY_FINDINGS = {
@@ -45,6 +48,7 @@ class CertAuditFinding:
     expires: Optional[str] = None
 
 
+@functools.lru_cache(maxsize=1)
 def _context() -> ssl.SSLContext:
     """A client context whose results do not depend on the Python version or the OS.
 
@@ -53,6 +57,8 @@ def _context() -> ssl.SSLContext:
     - TLS 1.2 is the floor on every Python version, so the "protocol" check is stable;
     - strict X.509 checking (default since Python 3.13) is off, so the same certificate
       gives the same verdict on 3.10 and 3.13.
+
+    The context is built once (loading the CA bundle is slow) and shared by all handshakes.
     """
     context = ssl.create_default_context(cafile=certifi.where())
     context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -99,7 +105,11 @@ class CertAuditor:
         not_after = cert.get("notAfter")
         if not not_after:
             return []
-        expires = datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after), tz=timezone.utc)
+        try:
+            expires = datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after), tz=timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            logger.debug("%s: unreadable notAfter %r", hostname, not_after)
+            return []
         days_left = (expires - datetime.now(timezone.utc)).days
         if days_left <= 14:
             severity = Severity.HIGH
@@ -111,7 +121,7 @@ class CertAuditor:
             "expiring", severity, hostname, f"Certificate expires in {days_left} days", expires.isoformat()
         )]
 
-    def audit_many(self, hostnames: Sequence[str], max_hosts: int = 100) -> List[CertAuditFinding]:
+    def audit_many(self, hostnames: Sequence[str], max_hosts: int = MAX_HOSTS) -> List[CertAuditFinding]:
         hosts = list(dict.fromkeys(hostnames))
         if len(hosts) > max_hosts:
             logger.warning("Certificate audit limited to %d of %d hosts", max_hosts, len(hosts))

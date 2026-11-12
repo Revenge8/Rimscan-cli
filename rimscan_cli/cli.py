@@ -15,6 +15,26 @@ from rimscan_cli.recon.enumeration import DEFAULT_SOURCES
 from rimscan_cli.scanner import SEVERITY_RANK, InvalidArguments, scan_domain, severity_counts
 
 
+def _positive_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number") from None
+    if not number > 0 or number == float("inf"):
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return number
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def _csv(value: str) -> List[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
@@ -41,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--secrets", action="store_true", help="fetch well-known paths and look for exposed secrets (requires --authorized)")
     scan.add_argument("--zone-transfer", action="store_true", help="attempt AXFR against the domain's nameservers (requires --authorized)")
     scan.add_argument("--nuclei", action="store_true", help="run Nuclei with dos, fuzz and intrusive templates excluded (requires --authorized)")
-    scan.add_argument("--nuclei-rate-limit", type=int, default=75, metavar="N", help="Nuclei requests per second (default: 75)")
+    scan.add_argument("--nuclei-rate-limit", type=_positive_int, default=75, metavar="N", help="Nuclei requests per second (default: 75)")
     scan.add_argument("--include-third-party", action="store_true",
                       help="let --secrets and --nuclei also probe hosts that CNAME to third-party services (skipped by default)")
     scan.add_argument("--bruteforce", action="store_true", help="also resolve a short list of common subdomain names")
@@ -50,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help=f"comma-separated enumeration sources (default: {','.join(DEFAULT_SOURCES)})")
     scan.add_argument("--resolver", type=_csv, metavar="IPS",
                       help="comma-separated DNS resolver addresses for DNS lookups (TLS and HTTP probes always use the system resolver)")
-    scan.add_argument("--timeout", type=float, default=10.0, metavar="SECONDS", help="network timeout (default: 10)")
+    scan.add_argument("--timeout", type=_positive_float, default=10.0, metavar="SECONDS", help="network timeout (default: 10)")
     scan.add_argument("-o", "--output", type=Path, help="write JSON results to this file instead of stdout")
     scan.add_argument("--fail-on", choices=[*SEVERITY_RANK, "none"], default="none",
                       help="exit with status 1 if any finding is at or above this severity (3 if the scan was incomplete)")
@@ -63,8 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # --quiet silences stderr completely, including log warnings (--verbose still wins).
+    log_level = logging.DEBUG if args.verbose else (logging.CRITICAL + 1 if args.quiet else logging.WARNING)
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.WARNING,
+        force=True,
+        level=log_level,
         format="%(levelname)s %(message)s",
         stream=sys.stderr,
     )
