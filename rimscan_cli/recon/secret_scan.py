@@ -171,11 +171,14 @@ class SecretScanner:
     def scan_domain(self, hosts: Iterable[str], max_hosts: int = MAX_HOSTS) -> List[SecretFinding]:
         """Fetch a fixed list of well-known paths on each host and scan the responses.
 
-        Sends up to len(COMMON_PATHS) GET requests per host (HTTP only if HTTPS fails to
-        connect). Redirects are not followed. At most `max_hosts` hosts are scanned; a
-        warning is logged when the list is longer. A response body is reported once per
-        host, so soft-404 pages do not repeat, but the same leak on two hosts is
-        reported for both. Callers must have permission to test every host passed in.
+        Sends one GET per path in COMMON_PATHS per host, plus one more over HTTP when the
+        HTTPS request fails to connect. The session may also retry once on a 429 or 5xx
+        answer (it never waits for a server-supplied Retry-After). Redirects are not
+        followed. A request that fails, including one that breaks while its body is being
+        read, only skips that path. At most `max_hosts` hosts are scanned; a warning is
+        logged when the list is longer. A response body is reported once per host, so
+        soft-404 pages do not repeat, but the same leak on two hosts is reported for both.
+        Callers must have permission to test every host passed in.
         """
         host_list = list(dict.fromkeys(hosts))
         if len(host_list) > max_hosts:
@@ -212,5 +215,12 @@ class SecretScanner:
             if path in _NON_HTML_PATHS and "html" in response.headers.get("Content-Type", "").lower():
                 response.close()
                 return url, None
-            return url, read_capped(response, _MAX_BODY_BYTES)
+            try:
+                return url, read_capped(response, _MAX_BODY_BYTES)
+            except requests.RequestException:
+                # The body is streamed, so a reset or read timeout can surface here. It must
+                # not escape the worker (pool.map would re-raise it and the scan would lose
+                # every result), and the host did answer, so there is no HTTP fallback.
+                response.close()
+                return url, None
         return f"https://{host}{path}", None
