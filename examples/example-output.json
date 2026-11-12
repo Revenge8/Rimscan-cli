@@ -2,10 +2,10 @@
   "certificate_findings": [
     {
       "check": "expiring",
-      "detail": "Certificate expires in 9 days",
+      "detail": "Certificate expires in 20 days",
       "expires": "2026-12-01T08:00:00+00:00",
       "hostname": "www.example.com",
-      "severity": "high"
+      "severity": "medium"
     }
   ],
   "dns_findings": [
