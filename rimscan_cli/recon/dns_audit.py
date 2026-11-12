@@ -11,7 +11,7 @@ import dns.query
 import dns.rcode
 import dns.resolver
 
-from rimscan_cli.recon._common import normalize_name
+from rimscan_cli.recon._common import is_public_address, normalize_name
 from rimscan_cli.recon.severity import Severity
 
 __all__ = ["DNSAuditFinding", "DNSAuditor", "AuditSeverity"]
@@ -161,6 +161,8 @@ class DNSAuditor:
             except dns.exception.DNSException:
                 continue
             for address in addresses:
+                if not is_public_address(address):
+                    continue  # never send a transfer request to an internal address
                 if self._axfr_allowed(address, domain):
                     findings.append(DNSAuditFinding(
                         "zone_transfer", Severity.CRITICAL, domain,
