@@ -16,10 +16,12 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from rimscan_cli import __version__
 from rimscan_cli.recon._common import all_public, normalize_domain
+from rimscan_cli.recon.cert_audit import MAX_HOSTS as MAX_CERT_HOSTS
 from rimscan_cli.recon.cert_audit import CertAuditor
 from rimscan_cli.recon.dns_audit import DNSAuditor
 from rimscan_cli.recon.enumeration import DEFAULT_SOURCES, SubdomainEnumerator
 from rimscan_cli.recon.resolver import DNSResolver, ResolutionStatus
+from rimscan_cli.recon.secret_scan import MAX_HOSTS as MAX_SECRET_HOSTS
 from rimscan_cli.recon.secret_scan import SecretScanner
 from rimscan_cli.recon.takeover import FingerprintDatabase, TakeoverDetector, TakeoverVerdict
 
@@ -28,6 +30,8 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 NUCLEI_EXCLUDED_TAGS = ("dos", "fuzz", "intrusive")
 SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# When at least this share of lookups time out or error, "no findings" cannot be trusted.
+RESOLUTION_FAILURE_THRESHOLD = 0.5
 _TAKEOVER_SEVERITY = {
     TakeoverVerdict.VULNERABLE.value: "high",
     TakeoverVerdict.LIKELY.value: "medium",
@@ -209,6 +213,11 @@ def scan_domain(
     hosts = sorted({domain, *subdomains})
     progress(f"resolving {len(hosts)} hosts")
     resolutions = resolver.resolve_many(hosts)
+    failed = [r for r in resolutions if r.status in (ResolutionStatus.TIMEOUT, ResolutionStatus.ERROR)]
+    if failed:
+        warnings.append(f"DNS resolution failed (timeout or error) for {len(failed)} of {len(resolutions)} hosts")
+        if len(failed) >= RESOLUTION_FAILURE_THRESHOLD * len(resolutions):
+            incomplete = True
     live = [r for r in resolutions if r.is_live]
     public_hosts = [r.hostname for r in live if all_public(r.a_records)]
     non_public = [r.hostname for r in live if not all_public(r.a_records)]
@@ -242,11 +251,15 @@ def scan_domain(
     }
     if include_certs:
         progress(f"auditing TLS certificates on {len(public_hosts)} live hosts")
+        if len(public_hosts) > MAX_CERT_HOSTS:
+            warnings.append(
+                f"TLS audit limited to {MAX_CERT_HOSTS} of {len(public_hosts)} live hosts; the rest were not checked"
+            )
         result["certificate_findings"] = CertAuditor(timeout=timeout).audit_many(public_hosts)
 
     if include_secrets or include_nuclei:
         third_party = {
-            r.hostname for r in resolutions if any(database.match(hop) for hop in r.cname_chain)
+            r.hostname for r in resolutions if any(database.is_third_party(hop) for hop in r.cname_chain)
         }
         active_hosts = public_hosts if include_third_party else [h for h in public_hosts if h not in third_party]
         skipped_third_party = [h for h in public_hosts if h not in active_hosts]
@@ -259,6 +272,10 @@ def scan_domain(
         result["skipped_hosts"] = {"non_public": non_public, "third_party": skipped_third_party}
         if include_secrets:
             progress(f"scanning well-known paths on {len(active_hosts)} hosts for exposed secrets")
+            if len(active_hosts) > MAX_SECRET_HOSTS:
+                warnings.append(
+                    f"secret scan limited to {MAX_SECRET_HOSTS} of {len(active_hosts)} hosts; the rest were not checked"
+                )
             result["secret_findings"] = SecretScanner(timeout=(min(timeout, 5.0), timeout)).scan_domain(active_hosts)
         if include_nuclei:
             progress("running nuclei")

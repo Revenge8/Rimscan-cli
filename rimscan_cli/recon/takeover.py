@@ -44,6 +44,22 @@ _SUPPLEMENTAL_CNAMES = {
     "Short.io": ("short.io",),
 }
 
+# Hosting platforms whose servers belong to someone else. Many of them have an empty
+# `cname` list in the upstream fingerprints (GitHub Pages, Heroku, Netlify, Shopify, ...),
+# so matching by fingerprint alone would miss them when deciding what is safe to probe.
+_HOSTING_PLATFORMS = (
+    "github.io", "githubusercontent.com", "gitlab.io", "bitbucket.io",
+    "herokuapp.com", "herokudns.com", "herokussl.com",
+    "netlify.app", "netlify.com", "netlifyglobalcdn.com",
+    "myshopify.com", "shopify.com", "shopifycloud.com",
+    "vercel.app", "vercel-dns.com", "pages.dev", "workers.dev", "fly.dev", "onrender.com",
+    "surge.sh", "ghost.io", "wpengine.com", "wpenginepowered.com",
+    "squarespace.com", "wixdns.net", "webflow.io", "tumblr.com", "wordpress.com",
+    "cloudfront.net", "amazonaws.com", "elasticbeanstalk.com",
+    "azurewebsites.net", "azureedge.net", "trafficmanager.net", "cloudapp.azure.com",
+    "zendesk.com", "hubspot.net", "readthedocs.io", "unbouncepages.com",
+)
+
 
 class TakeoverVerdict(Enum):
     VULNERABLE = "vulnerable"
@@ -140,6 +156,17 @@ class FingerprintDatabase:
             if hostname == suffix or hostname.endswith("." + suffix):
                 return fp
         return None
+
+    def is_third_party(self, hostname: str) -> bool:
+        """True if `hostname` belongs to a service that is not the scan target's own.
+
+        Covers every fingerprint entry (vulnerable or not) and the built-in list of hosting
+        platforms, including those whose upstream entry has no CNAME suffix.
+        """
+        name = hostname.lower().rstrip(".")
+        if self.match(name) is not None:
+            return True
+        return any(name == suffix or name.endswith("." + suffix) for suffix in _HOSTING_PLATFORMS)
 
 
 class TakeoverDetector:
