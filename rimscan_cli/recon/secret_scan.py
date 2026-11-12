@@ -15,7 +15,7 @@ import requests
 
 from rimscan_cli.recon._http import make_session, read_capped
 
-__all__ = ["SecretFinding", "SecretScanner", "SECRET_PATTERNS", "COMMON_PATHS"]
+__all__ = ["SecretFinding", "SecretScanner", "SECRET_PATTERNS", "COMMON_PATHS", "MAX_HOSTS"]
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ COMMON_PATHS = (
 
 # Config-style files are never legitimately served as HTML; an HTML answer is a soft 404.
 _NON_HTML_PATHS = {"/.env", "/.env.local", "/.env.production"}
+MAX_HOSTS = 50
 _MAX_BODY_BYTES = 1024 * 1024
 _CONTEXT_RADIUS = 40
 _AWS_CONTEXT_RADIUS = 80
@@ -167,7 +168,7 @@ class SecretScanner:
                 )
         return findings
 
-    def scan_domain(self, hosts: Iterable[str], max_hosts: int = 50) -> List[SecretFinding]:
+    def scan_domain(self, hosts: Iterable[str], max_hosts: int = MAX_HOSTS) -> List[SecretFinding]:
         """Fetch a fixed list of well-known paths on each host and scan the responses.
 
         Sends up to len(COMMON_PATHS) GET requests per host (HTTP only if HTTPS fails to
@@ -204,7 +205,8 @@ class SecretScanner:
                 )
             except requests.RequestException:
                 continue
-            if response.status_code >= 400:
+            if response.status_code >= 300:
+                # Errors and redirects (redirects are not followed) carry no file content.
                 response.close()
                 return url, None
             if path in _NON_HTML_PATHS and "html" in response.headers.get("Content-Type", "").lower():
