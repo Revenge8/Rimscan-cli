@@ -113,10 +113,12 @@ def test_dmarc_lookup_failure_on_subdomain_is_not_a_finding():
     assert a.check_dmarc("sub.example.com") == [] and a.errors
 
 
+# The nameserver address must be globally routable: transfers are never sent to private,
+# loopback or documentation addresses (192.0.2.0/24 is a documentation range).
 def test_zone_transfer_reads_only_first_message(monkeypatch):
     a = auditor({
         ("example.com", "NS"): [SimpleNamespace(target="ns1.example.com.")],
-        ("ns1.example.com", "A"): ["192.0.2.1"],
+        ("ns1.example.com", "A"): ["1.1.1.1"],
     })
     consumed = []
 
@@ -134,7 +136,7 @@ def test_zone_transfer_reads_only_first_message(monkeypatch):
 def test_zone_transfer_refused(monkeypatch):
     a = auditor({
         ("example.com", "NS"): [SimpleNamespace(target="ns1.example.com.")],
-        ("ns1.example.com", "A"): ["192.0.2.1"],
+        ("ns1.example.com", "A"): ["1.1.1.1"],
     })
 
     def refused(*args, **kwargs):
