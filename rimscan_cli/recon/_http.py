@@ -16,13 +16,19 @@ _CHARSET = re.compile(r"charset=\s*[\"']?([\w.:-]+)", re.IGNORECASE)
 
 
 def make_session(retries: int = 2) -> requests.Session:
-    """Build a session. Pass ``retries=0`` when each request must be sent at most once."""
+    """Build a session. Pass ``retries=0`` when each request must be sent at most once.
+
+    A server-supplied ``Retry-After`` header is ignored: urllib3 would sleep for as long as
+    the server asks (the request timeout does not cover that sleep), so a scanned host could
+    stall a worker thread for hours. Retries use the short exponential backoff instead.
+    """
     retry = Retry(
         total=retries,
         backoff_factor=1.0,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("GET", "HEAD"),
         raise_on_status=False,
+        respect_retry_after_header=False,
     )
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
