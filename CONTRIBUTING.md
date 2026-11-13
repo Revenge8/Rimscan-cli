@@ -9,6 +9,8 @@
 5. Run `python -m pip install -e ".[dev]"`, `python -m ruff check .` and
    `python -m pytest` before opening a pull request.
 6. Preserve the authorization warnings in the CLI and documentation.
+7. Unless you state otherwise, contributions you submit are licensed under the
+   Apache License 2.0, the same as the project.
 
 Code lives in `rimscan_cli/`: `cli.py` is the thin command-line layer, `scanner.py`
 orchestrates a scan, `recon/` holds the individual scanning modules, and `data/` holds
