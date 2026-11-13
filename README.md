@@ -3,6 +3,7 @@
 # Rimscan CLI
 
 ![tests](https://github.com/Revenge8/Rimscan-cli/actions/workflows/tests.yml/badge.svg)
+![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 
 Rimscan CLI is a standalone, database-free tool for external attack-surface
 reconnaissance of domains you are authorized to test. It discovers subdomains,
@@ -211,7 +212,7 @@ The test suite runs offline: all network and DNS access is mocked.
 
 ## License
 
-This project is source-available under the Elastic License 2.0. See
+This project is open source under the [Apache License 2.0](LICENSE). See
 [LICENSE](LICENSE) for the complete license text. The takeover fingerprints are
 sourced from [can-i-take-over-xyz](https://github.com/EdOverflow/can-i-take-over-xyz);
 see [NOTICE](NOTICE) and review that project's terms before redistributing the fingerprint data.
