@@ -9,7 +9,9 @@ description = "External attack-surface reconnaissance for domains you own or are
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Elastic-2.0"
-license-files = ["LICENSE"]
+# NOTICE carries the attribution for the bundled can-i-take-over-xyz fingerprints, so it
+# has to ship with every sdist and wheel next to the license.
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Rimscan" }]
 keywords = ["security", "reconnaissance", "attack-surface", "subdomain-takeover", "dns"]
 classifiers = [

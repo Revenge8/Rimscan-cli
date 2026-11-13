@@ -7,10 +7,14 @@ import dns.rcode
 import dns.resolver
 import pytest
 
-from rimscan_cli import cli
+from rimscan_cli import cli, scanner
 from rimscan_cli.recon import dns_audit, enumeration
 from rimscan_cli.recon.dns_audit import AuditSeverity as Sev, DNSAuditor
 from rimscan_cli.recon.enumeration import SubdomainEnumerator
+from rimscan_cli.recon.secret_scan import SecretScanner
+from tests.test_scanner import fakes  # noqa: F401  (fixture)
+
+HEADER = "-----BEGIN PRIVATE KEY-----"
 
 
 class Streamed:
@@ -61,6 +65,20 @@ def test_repeated_cli_list_values_are_dropped_in_order():
     assert cli._csv("otx, crt.sh,otx,,crt.sh") == ["otx", "crt.sh"]
 
 
+def test_repeated_sources_are_queried_once(fakes, monkeypatch):  # noqa: F811
+    seen = []
+    base = scanner.SubdomainEnumerator  # the fake installed by the fixture
+
+    class Spy(base):
+        def run(self, sources, on_source_done=None):
+            seen.append(list(sources))
+            return super().run(sources, on_source_done)
+
+    monkeypatch.setattr(scanner, "SubdomainEnumerator", Spy)
+    scanner.scan_domain("example.com", sources=["otx", "crt.sh", "otx"])
+    assert seen == [["otx", "crt.sh"]]
+
+
 def test_zone_transfer_tries_aaaa_when_a_nameserver_has_no_a_record(monkeypatch):
     auditor = DNSAuditor()
     asked = []
@@ -99,3 +117,21 @@ def test_aaaa_is_not_asked_when_the_nameserver_has_an_a_record(monkeypatch):
     monkeypatch.setattr(dns_audit.dns.query, "xfr", refused)
     assert auditor.check_zone_transfer("example.com") == []
     assert "AAAA" not in asked
+
+
+def test_private_key_header_is_shown_and_key_material_on_the_same_line_is_masked():
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7"
+    line = f'var k="{HEADER}\\n{body}\\n-----END PRIVATE KEY-----";'
+    (finding,) = SecretScanner().scan_text(line)
+    assert finding.secret_type == "private_key"
+    assert finding.context == f'var k="{HEADER}[...]'
+    exported = finding.to_dict()
+    assert exported["match"] == HEADER
+    assert exported["context"] == f'var k="{HEADER}[...]'
+    assert body[:8] not in str(exported)
+
+
+def test_private_key_header_on_its_own_line_is_reported_whole():
+    (finding,) = SecretScanner().scan_text("-----BEGIN OPENSSH PRIVATE KEY-----")
+    exported = finding.to_dict()
+    assert exported["match"] == exported["context"] == "-----BEGIN OPENSSH PRIVATE KEY-----"
