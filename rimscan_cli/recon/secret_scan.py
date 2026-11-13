@@ -38,6 +38,8 @@ _MAX_BODY_BYTES = 1024 * 1024
 _CONTEXT_RADIUS = 40
 _AWS_CONTEXT_RADIUS = 80
 
+_PRIVATE_KEY_HEADER = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+
 SECRET_PATTERNS: Dict[str, Pattern[str]] = {
     "aws_access_key": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     "aws_secret_key": re.compile(r"(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])"),
@@ -45,7 +47,7 @@ SECRET_PATTERNS: Dict[str, Pattern[str]] = {
     "slack_token": re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
     "stripe_live_key": re.compile(r"\b[sr]k_live_[0-9a-zA-Z]{24,}"),
     "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*"),
-    "private_key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    "private_key": _PRIVATE_KEY_HEADER,
 }
 
 # A bare 40-character base64 string is too common (hashes, build ids) to report alone.
@@ -55,6 +57,15 @@ Span = Tuple[int, int]
 
 
 def _redact(value: str) -> str:
+    """Mask a credential, keeping only its first and last four characters.
+
+    A private-key header is a public marker, not a secret, and it tells a reader what kind
+    of key was exposed (RSA, EC, OpenSSH, encrypted, ...), so it is kept whole. Anything
+    that follows it inside the same span is key material and is replaced by "[...]".
+    """
+    header = _PRIVATE_KEY_HEADER.match(value)
+    if header:
+        return header.group(0) + ("[...]" if len(value) > header.end() else "")
     return "***" if len(value) <= 8 else f"{value[:4]}...{value[-4:]}"
 
 
@@ -155,7 +166,11 @@ class SecretScanner:
                         nearby = line[max(0, match.start() - _AWS_CONTEXT_RADIUS):match.end() + _AWS_CONTEXT_RADIUS]
                         if entropy < self.min_entropy or not _AWS_SECRET_CONTEXT.search(nearby):
                             continue
-                    hits.append((match.start(), match.end(), secret_type, value, entropy))
+                    # A key embedded in JSON or JS keeps its body on the same line as the
+                    # header. Everything after the header on that line counts as part of the
+                    # secret, so the context shown for the finding never contains key material.
+                    end = len(line) if secret_type == "private_key" else match.end()
+                    hits.append((match.start(), end, secret_type, value, entropy))
             if not hits:
                 continue
             spans = _merge_spans((start, end) for start, end, *_ in hits)
@@ -171,11 +186,14 @@ class SecretScanner:
     def scan_domain(self, hosts: Iterable[str], max_hosts: int = MAX_HOSTS) -> List[SecretFinding]:
         """Fetch a fixed list of well-known paths on each host and scan the responses.
 
-        Sends up to len(COMMON_PATHS) GET requests per host (HTTP only if HTTPS fails to
-        connect). Redirects are not followed. At most `max_hosts` hosts are scanned; a
-        warning is logged when the list is longer. A response body is reported once per
-        host, so soft-404 pages do not repeat, but the same leak on two hosts is
-        reported for both. Callers must have permission to test every host passed in.
+        Sends one GET per path in COMMON_PATHS per host, plus one more over HTTP when the
+        HTTPS request fails to connect. The session may also retry once on a 429 or 5xx
+        answer (it never waits for a server-supplied Retry-After). Redirects are not
+        followed. A request that fails, including one that breaks while its body is being
+        read, only skips that path. At most `max_hosts` hosts are scanned; a warning is
+        logged when the list is longer. A response body is reported once per host, so
+        soft-404 pages do not repeat, but the same leak on two hosts is reported for both.
+        Callers must have permission to test every host passed in.
         """
         host_list = list(dict.fromkeys(hosts))
         if len(host_list) > max_hosts:
@@ -212,5 +230,12 @@ class SecretScanner:
             if path in _NON_HTML_PATHS and "html" in response.headers.get("Content-Type", "").lower():
                 response.close()
                 return url, None
-            return url, read_capped(response, _MAX_BODY_BYTES)
+            try:
+                return url, read_capped(response, _MAX_BODY_BYTES)
+            except requests.RequestException:
+                # The body is streamed, so a reset or read timeout can surface here. It must
+                # not escape the worker (pool.map would re-raise it and the scan would lose
+                # every result), and the host did answer, so there is no HTTP fallback.
+                response.close()
+                return url, None
         return f"https://{host}{path}", None

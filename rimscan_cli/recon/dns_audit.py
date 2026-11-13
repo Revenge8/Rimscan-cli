@@ -147,20 +147,24 @@ class DNSAuditor:
         return []
 
     def check_zone_transfer(self, domain: str) -> List[DNSAuditFinding]:
-        """Ask each nameserver for an AXFR and stop reading after the first reply message."""
+        """Ask each nameserver for an AXFR and stop reading after the first reply message.
+
+        A failed NS or nameserver-address lookup is recorded in `errors`, so a run that could
+        not test a nameserver is reported as incomplete instead of looking clean. A
+        nameserver's A records are used; if it has none, its AAAA records are tried.
+        """
         try:
             nameservers = self.resolver.resolve(domain, "NS")
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+            return []
         except dns.exception.DNSException:
+            self.errors.append(f"NS lookup for {domain} failed; zone transfer not checked")
             return []
 
         findings: List[DNSAuditFinding] = []
         for ns in nameservers:
             ns_host = str(ns.target).rstrip(".")
-            try:
-                addresses = [str(a) for a in self.resolver.resolve(ns_host, "A")]
-            except dns.exception.DNSException:
-                continue
-            for address in addresses:
+            for address in self._nameserver_addresses(ns_host):
                 if not is_public_address(address):
                     continue  # never send a transfer request to an internal address
                 if self._axfr_allowed(address, domain):
@@ -170,6 +174,18 @@ class DNSAuditor:
                     ))
                     break
         return findings
+
+    def _nameserver_addresses(self, ns_host: str) -> List[str]:
+        """A records of a nameserver, or its AAAA records when it has no A record."""
+        for rdtype in ("A", "AAAA"):
+            try:
+                return [str(a) for a in self.resolver.resolve(ns_host, rdtype)]
+            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+                continue
+            except dns.exception.DNSException:
+                self.errors.append(f"{rdtype} lookup for nameserver {ns_host} failed; zone transfer not checked on it")
+                return []
+        return []
 
     def _axfr_allowed(self, address: str, domain: str) -> bool:
         try:

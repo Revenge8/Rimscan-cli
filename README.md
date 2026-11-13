@@ -74,11 +74,12 @@ for the shape of the output.
 | 130 | Interrupted. |
 
 A scan is **incomplete** when every enumeration source failed or timed out (and
-`--bruteforce` was not used), when a DNS lookup in the DNS audit failed, or when at least
-half of the discovered hosts could not be resolved (timeouts or errors). A smaller number
-of failed lookups only adds a warning. In that case "no findings" does not mean the target
-is clean: the JSON has `"incomplete": true`, the reasons are listed under `warnings`, and
-CI runs using `--fail-on` exit with status 3 instead of passing silently.
+`--bruteforce` was not used), when a DNS lookup in the DNS audit failed (this includes the
+nameserver lookups behind `--zone-transfer`), or when at least half of the discovered hosts
+could not be resolved (timeouts or errors). A smaller number of failed lookups only adds a
+warning. In that case "no findings" does not mean the target is clean: the JSON has
+`"incomplete": true`, the reasons are listed under `warnings`, and CI runs using `--fail-on`
+exit with status 3 instead of passing silently.
 
 ### Output
 
@@ -88,7 +89,10 @@ source), `subdomains`, `resolutions`, `takeover_findings`, `dns_findings`, `warn
 `incomplete`, and, when enabled, `certificate_findings`, `secret_findings`, `nuclei`,
 `active_targets` and `skipped_hosts`. Secret values are redacted in the output: a match is
 shown as its first and last four characters, and the surrounding context is built around the
-match with every credential found on that line redacted.
+match with every credential found on that line redacted. A private-key finding shows its
+`-----BEGIN ... PRIVATE KEY-----` header in full, because the header is public and tells you
+what kind of key was exposed; any key material that follows it on the same line is replaced by
+`[...]`.
 
 ## Data sent to third parties
 
@@ -115,8 +119,10 @@ This tool combines public data sources with direct network checks:
   redirects are not followed.
 - **`--bruteforce`:** DNS lookups for a short wordlist.
 - **`--secrets`:** GET requests for a fixed list of common paths on every selected host
-  (redirects are not followed).
-- **`--zone-transfer`:** AXFR requests to the domain's nameservers.
+  (redirects are not followed). A request that fails, including one that breaks while its
+  body is being read, only skips that path.
+- **`--zone-transfer`:** AXFR requests to the domain's nameservers, using each nameserver's
+  A records, or its AAAA records if it has none.
 - **`--nuclei`:** the separately installed Nuclei scanner, which sends active
   probes. Excluding the `dos`, `fuzz` and `intrusive` tags is not a guarantee
   that every template is passive.
@@ -130,9 +136,15 @@ Safeguards that apply to every active step:
   (the takeover fingerprints plus a built-in list of hosting platforms such as GitHub Pages,
   Heroku, Netlify and Shopify), because those servers are not yours. Pass
   `--include-third-party` only if you are authorized to test them. The list of hosts that
-  were probed or skipped is in `active_targets` and `skipped_hosts`.
+  were probed or skipped is in `active_targets` and `skipped_hosts`. The built-in list also
+  contains large cloud providers (for example CloudFront, AWS load balancers and Azure web
+  apps), so on a target that is mostly hosted there the default active scan can cover only a
+  few hosts. Check `skipped_hosts.third_party` before reading "no findings" as "nothing
+  exposed".
 - `--zone-transfer` never sends a request to a nameserver whose address is non-public.
 - Redirect responses are never treated as file content by the secret scan.
+- A server-supplied `Retry-After` header is ignored, so a scanned host cannot stall the tool
+  by asking it to wait.
 - Caps: the TLS audit covers at most 100 hosts and the secret scan at most 50; a warning is
   added to the JSON `warnings` (and logged) when a cap truncates the list.
 
@@ -165,7 +177,8 @@ notifications, a dashboard, Postgres, Redis, or Celery.
 - **Secret scan.** It looks at a fixed list of paths only. The 40-character AWS secret
   pattern is reported only when "aws" or "secret" appears next to it and its entropy is high.
 - **Enumeration sources fail often** (rate limits are common). Check `sources` and
-  `warnings` in the output.
+  `warnings` in the output. The crt.sh response is read up to 50 MB; for a domain with more
+  certificates than that, the source is reported as failed instead of returning a partial list.
 - **DNS rebinding.** Non-public addresses are rejected using the lookup done during the scan.
   A host's DNS could answer differently when the probe connects; the tool does not pin the
   connection to the checked address.

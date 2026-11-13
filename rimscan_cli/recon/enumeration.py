@@ -30,6 +30,10 @@ BRUTEFORCE_WORDLIST = (
 )
 
 _WAYBACK_MAX_BYTES = 25 * 1024 * 1024
+# crt.sh answers with one JSON array for the whole domain, which can be huge. Past this size
+# the body is cut off, the JSON no longer parses, and the source is reported as failed
+# instead of the whole array being held in memory.
+_CRTSH_MAX_BYTES = 50 * 1024 * 1024
 _RAPIDDNS_LINK = re.compile(r'target="_blank">([^<]+)</a>')
 
 
@@ -70,7 +74,11 @@ class SubdomainEnumerator:
     # -- sources -----------------------------------------------------------
 
     def from_crtsh(self) -> Set[str]:
-        data = self._get_json(f"https://crt.sh/?q=%25.{self.domain}&output=json")
+        response = self.session.get(
+            f"https://crt.sh/?q=%25.{self.domain}&output=json", timeout=self.timeout, stream=True
+        )
+        response.raise_for_status()
+        data = json.loads(read_capped(response, _CRTSH_MAX_BYTES))
         return self._collect(
             name for entry in data for name in entry.get("name_value", "").split("\n")
         )

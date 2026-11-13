@@ -189,7 +189,8 @@ def scan_domain(
     incomplete = False
 
     progress(f"enumerating subdomains of {domain}")
-    chosen_sources = list(sources) if sources else list(DEFAULT_SOURCES)
+    # Repeated names are dropped so each source is queried, reported and warned about once.
+    chosen_sources = list(dict.fromkeys(sources)) if sources else list(DEFAULT_SOURCES)
     enumerator = SubdomainEnumerator(domain, timeout=timeout)
     subdomains = enumerator.run(
         chosen_sources,

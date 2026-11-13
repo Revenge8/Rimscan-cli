@@ -103,6 +103,16 @@ class Fingerprint:
             http_status=status,
         )
 
+    def matches_body(self, body: str) -> bool:
+        """True if the page text matches. Tried on the raw HTML and on its entity-decoded form.
+
+        The pattern is built from the entity-decoded fingerprint (``&rsquo;`` becomes a
+        curly apostrophe), but a real page often carries the entity itself in its source.
+        """
+        if self.pattern is None:
+            return False
+        return self.pattern.search(body) is not None or self.pattern.search(html.unescape(body)) is not None
+
 
 def _usable_cnames(values) -> List[str]:
     """Keep real domain suffixes; the upstream list also contains URLs and bare IPs."""
@@ -249,7 +259,7 @@ class TakeoverDetector:
                 "could not reach the host over HTTP or HTTPS",
             )
         status, body = response
-        body_match = fp.pattern is not None and fp.pattern.search(body) is not None
+        body_match = fp.matches_body(body)
         status_match = fp.http_status is None or status == fp.http_status
 
         if fp.pattern is not None and body_match and status_match:
