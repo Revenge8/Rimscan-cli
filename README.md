@@ -1,9 +1,11 @@
-![RimScan](Rimscan.png)
+![RimScan](https://raw.githubusercontent.com/Revenge8/Rimscan-cli/main/Rimscan.png)
 
 # Rimscan CLI
 
 ![tests](https://github.com/Revenge8/Rimscan-cli/actions/workflows/tests.yml/badge.svg)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
+![PyPI](https://img.shields.io/pypi/v/rimscan-cli)
+![Python](https://img.shields.io/pypi/pyversions/rimscan-cli)
 
 Rimscan CLI is a standalone, database-free tool for external attack-surface
 reconnaissance of domains you are authorized to test. It discovers subdomains,
@@ -19,13 +21,20 @@ This tool is not a license to scan arbitrary third-party infrastructure.
 Requires Python 3.10 or newer.
 
 ```bash
+pipx install rimscan-cli
+```
+
+Or with pip in a virtual environment:
+
+```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 source .venv/bin/activate
-python -m pip install .
+python -m pip install rimscan-cli
 ```
 
 This installs the `rimscan-cli` command. `python -m rimscan_cli` works as well.
+To install from source, clone the repo and run `python -m pip install .`.
 
 ## Usage
 
